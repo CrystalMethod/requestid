@@ -111,7 +111,7 @@ let currentPatterns = [];
  * Render the pattern list into the DOM.
  */
 function renderPatterns() {
-	patternList.innerHTML = "";
+	patternList.textContent = "";
 
 	if (currentPatterns.length === 0) {
 		const li = document.createElement("li");
