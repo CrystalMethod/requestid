@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RequestID Settings</title>
+	<link rel="stylesheet" href="src/popup.css">
+</head>
+<body>
+	<h1 id="app-title">RequestID</h1>
+
+	<!-- Prefix configuration -->
+	<section class="prefix-section" aria-labelledby="prefix-heading">
+		<h2 id="prefix-heading">Prefix</h2>
+		<div class="prefix-row">
+			<label for="prefix-input" class="sr-only">Request-ID prefix</label>
+			<input
+				type="text"
+				id="prefix-input"
+				placeholder="e.g. myapp"
+				autocomplete="off"
+			/>
+			<button id="save-prefix-btn" type="button">Save</button>
+		</div>
+	</section>
+
+	<!-- Pattern configuration -->
+	<section class="patterns-section" aria-labelledby="patterns-heading">
+		<h2 id="patterns-heading">URL Patterns</h2>
+		<div class="pattern-row">
+			<label for="pattern-input" class="sr-only">Add URL pattern</label>
+			<input
+				type="text"
+				id="pattern-input"
+				placeholder="e.g. *://api.example.com/*"
+				autocomplete="off"
+			/>
+			<button id="add-pattern-btn" type="button">Add</button>
+		</div>
+		<p id="invalid-message" class="invalid-message" aria-live="assertive" role="alert"></p>
+		<ul id="pattern-list" class="pattern-list" role="list" aria-label="Configured URL patterns"></ul>
+	</section>
+
+	<!-- Status indicator -->
+	<footer class="status-section" aria-live="polite" role="status">
+		<span id="status-indicator" class="status-indicator"></span>
+	</footer>
+
+	<script src="src/popup.js"></script>
+</body>
+</html>
