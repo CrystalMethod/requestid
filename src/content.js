@@ -153,23 +153,38 @@ if (typeof window.fetch === "function") {
 
       if (urlStr && matchesAny(urlStr) && prefix) {
         let headers = args[1]?.headers;
+        let injectIntoRequestHeaders = true;
+
         if (headers instanceof Headers) {
           if (!headers.has("X-Request-ID")) {
             headers.set("X-Request-ID", buildRequestId());
           }
         } else if (Array.isArray(headers)) {
           // skip — array headers are hard to modify; let request proceed
-        } else if (headers && typeof headers === "object") {
-          // plain object — check for existing key (case-insensitive)
+          injectIntoRequestHeaders = false;
+        } else if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+          // plain object — check for existing key (case-insensitive), convert to Headers
           const hasHeader = Object.keys(headers).some(
             (k) => k.toLowerCase() === "x-request-id",
           );
           if (!hasHeader) {
-            headers = { ...headers, "X-Request-ID": buildRequestId() };
+            headers = new Headers(headers);
+            headers.set("X-Request-ID", buildRequestId());
+          } else {
+            headers = new Headers(headers);
           }
+        } else if (!("headers" in (args[1] || {}))) {
+          // headers missing — construct new Headers instance with injected header
+          headers = new Headers();
+          headers.set("X-Request-ID", buildRequestId());
+        } else {
+          // headers explicitly null/undefined in init — respect user intent
+          injectIntoRequestHeaders = false;
         }
-        if (urlStr instanceof Request || args[0] instanceof Request) {
-          return _fetch(args[0], { ...(args[1] || {}), headers });
+
+        if (args[0] instanceof Request && injectIntoRequestHeaders) {
+          // Request headers are immutable — rebuild with new headers
+          return _fetch(new Request(args[0], { headers }));
         }
         return _fetch(args[0], { ...(args[1] || {}), headers });
       }
@@ -186,6 +201,7 @@ if (typeof window.XMLHttpRequest === "function") {
 
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this._requestUrl = url;
+    this._headerInjected = false;
     try { return _xhrOpen.apply(this, [method, url, ...rest]); }
     catch (_) { return _xhrOpen.apply(this, [method, url, ...rest]); }
   };
@@ -195,7 +211,6 @@ if (typeof window.XMLHttpRequest === "function") {
       const urlStr = this._requestUrl;
       if (urlStr && matchesAny(urlStr) && prefix && !this._headerInjected) {
         try {
-          const existing = this.getAllResponseHeaders ? null : null; // cannot read outgoing headers
           // Check if setRequestHeader was already called with X-Request-ID
           // by trying to set it — the browser keeps the first value,
           // so we only inject when we're confident it's not set.
