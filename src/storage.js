@@ -30,7 +30,7 @@ const DEFAULT_PATTERNS = [];
  * @returns {value is string}
  */
 function isValidPattern(value) {
-  return typeof value === "string" && value.trim().length > 0;
+	return typeof value === "string" && value.trim().length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,13 +42,13 @@ function isValidPattern(value) {
  * @returns {Promise<string>}
  */
 export async function getPrefix() {
-  try {
-    const result = await chrome.storage.local.get("prefix");
-    return result.prefix ?? DEFAULT_PREFIX;
-  } catch {
-    // Fail-open: default to empty string.
-    return DEFAULT_PREFIX;
-  }
+	try {
+		const result = await chrome.storage.local.get("prefix");
+		return result.prefix ?? DEFAULT_PREFIX;
+	} catch {
+		// Fail-open: default to empty string.
+		return DEFAULT_PREFIX;
+	}
 }
 
 /**
@@ -57,16 +57,16 @@ export async function getPrefix() {
  * @returns {Promise<void>}
  */
 export async function setPrefix(prefix) {
-  try {
-    if (prefix == null || typeof prefix !== "string") {
-      throw new TypeError("prefix must be a string");
-    }
-    // Empty prefix is allowed — it triggers onboarding.
-    await chrome.storage.local.set({ prefix });
-  } catch (err) {
-    // Fail-open: silently ignore; the default is returned on read.
-    console.warn("[RequestID] storage.setPrefix failed:", err);
-  }
+	try {
+		if (prefix == null || typeof prefix !== "string") {
+			throw new TypeError("prefix must be a string");
+		}
+		// Empty prefix is allowed — it triggers onboarding.
+		await chrome.storage.local.set({ prefix });
+	} catch (err) {
+		// Fail-open: silently ignore; the default is returned on read.
+		console.warn("[RequestID] storage.setPrefix failed:", err);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -78,12 +78,12 @@ export async function setPrefix(prefix) {
  * @returns {Promise<string[]>}
  */
 export async function getPatterns() {
-  try {
-    const result = await chrome.storage.local.get("patterns");
-    return Array.isArray(result.patterns) ? result.patterns : DEFAULT_PATTERNS;
-  } catch {
-    return DEFAULT_PATTERNS;
-  }
+	try {
+		const result = await chrome.storage.local.get("patterns");
+		return Array.isArray(result.patterns) ? result.patterns : DEFAULT_PATTERNS;
+	} catch {
+		return DEFAULT_PATTERNS;
+	}
 }
 
 /**
@@ -93,15 +93,15 @@ export async function getPatterns() {
  * @returns {Promise<void>}
  */
 export async function setPatterns(patterns) {
-  try {
-    if (!Array.isArray(patterns)) {
-      throw new TypeError("patterns must be an array");
-    }
+	try {
+		if (!Array.isArray(patterns)) {
+			throw new TypeError("patterns must be an array");
+		}
 
-    // Filter to only valid (non-empty string) patterns.
-    const valid = patterns.filter(isValidPattern);
-    await chrome.storage.local.set({ patterns: valid });
-  } catch (err) {
-    console.warn("[RequestID] storage.setPatterns failed:", err);
-  }
+		// Filter to only valid (non-empty string) patterns.
+		const valid = patterns.filter(isValidPattern);
+		await chrome.storage.local.set({ patterns: valid });
+	} catch (err) {
+		console.warn("[RequestID] storage.setPatterns failed:", err);
+	}
 }
