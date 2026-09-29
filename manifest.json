@@ -7,11 +7,5 @@
 	"background": {
 		"service_worker": "src/background.js"
 	},
-	"content_scripts": [
-		{
-			"matches": ["<all_urls>"],
-			"js": ["src/content.js"]
-		}
-	],
 	"offline_enabled": true
 }
