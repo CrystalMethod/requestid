@@ -33,8 +33,12 @@ export function matchesPattern(urlString, patternString) {
     return false;
   }
 
-  // Protocol: `*` matches any scheme; otherwise exact match.
-  if (parsedPattern.protocol !== "*" && parsedPattern.protocol !== parsedUrl.protocol) {
+  // Protocol: `*` or empty matches any scheme; otherwise exact match.
+  if (
+    parsedPattern.protocol !== "*" &&
+    parsedPattern.protocol !== "" &&
+    parsedPattern.protocol !== parsedUrl.protocol
+  ) {
     return false;
   }
 
@@ -77,7 +81,7 @@ export function matchesAny(urlString, patternList) {
  * @returns {{ protocol: string, host: string, path: string } | null}
  */
 function parsePattern(patternString) {
-  let scheme = "";
+  let scheme = "*";
   let remainder = patternString;
 
   // Extract protocol (e.g. `https://`, `*://`, `ftp://`).
@@ -148,7 +152,8 @@ function matchHost(patternHost, urlHost) {
     return true;
   }
 
-  // Subdomain wildcard: `*.example.com` matches `foo.example.com` but NOT `example.com`.
+  // Subdomain wildcard: `*.example.com` matches any subdomain (e.g. `foo.example.com`,
+  // `foo.bar.example.com`) but NOT `example.com` itself.
   if (patternHost.startsWith("*.")) {
     const suffix = patternHost.slice(1); // strip `*` → `.example.com`
     // urlHost must end with `.example.com` AND have something before the dot.
@@ -164,10 +169,10 @@ function matchHost(patternHost, urlHost) {
 // ---------------------------------------------------------------------------
 
 /**
- * Match a URL path against a pattern path segment-by-segment.
+ * Match a URL path against a pattern path.
  *
- * `*` segments match any corresponding URL segment.
- * Non-wildcard segments require an exact character-by-character match.
+ * Per Chrome MV3 semantics, `*` matches any sequence of characters including slashes.
+ * Non-wildcard characters require an exact match (regex-special characters escaped).
  *
  * @param {string} patternPath
  * @param {string} urlPath
@@ -178,29 +183,14 @@ function matchPath(patternPath, urlPath) {
     return true;
   }
 
-  const patternSegments = patternPath.split("/");
-  const urlSegments = urlPath.split("/");
+  // Build a regex: escape regex-special chars except `*`, then turn `*` into `.*`.
+  const regexStr = patternPath
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
 
-  for (let i = 0; i < patternSegments.length; i++) {
-    const ps = patternSegments[i];
-    const us = urlSegments[i];
-
-    // Pattern segment ended but URL still has segments — no match.
-    if (ps === undefined) {
-      return false;
-    }
-
-    // Wildcard segment matches anything.
-    if (ps === "*") {
-      continue;
-    }
-
-    // Exact character match required.
-    if (ps !== us) {
-      return false;
-    }
+  try {
+    return new RegExp("^" + regexStr + "$").test(urlPath);
+  } catch {
+    return false;
   }
-
-  // URL must not have extra trailing segments beyond the pattern.
-  return urlSegments.length <= patternSegments.length;
 }
