@@ -4,9 +4,6 @@
 	"version": "1.0.0",
 	"description": "Automatically injects Request-ID headers into outgoing HTTP requests for debugging and traceability.",
 	"permissions": ["storage"],
-	"action": {
-		"default_popup": "src/popup.html"
-	},
 	"background": {
 		"service_worker": "src/background.js"
 	},
