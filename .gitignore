@@ -1,0 +1,5 @@
+node_modules/
+.swarm-worktrees/
+dist/
+*.log
+.DS_Store
