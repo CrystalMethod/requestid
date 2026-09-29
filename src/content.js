@@ -183,8 +183,18 @@ if (typeof window.fetch === "function") {
         }
 
         if (args[0] instanceof Request && injectIntoRequestHeaders) {
-          // Request headers are immutable — rebuild with new headers
-          return _fetch(new Request(args[0], { headers }));
+          if (args[1] && "headers" in args[1]) {
+            // init headers provided — rebuild Request with merged headers
+            return _fetch(new Request(args[0], { headers }));
+          }
+          // No init headers — preserve original Request headers by building
+          // a new Headers from them, then inject X-Request-ID on top
+          // (only if not already present)
+          const reqHeaders = new Headers(args[0].headers);
+          if (!reqHeaders.has("X-Request-ID")) {
+            reqHeaders.set("X-Request-ID", buildRequestId());
+          }
+          return _fetch(new Request(args[0], { headers: reqHeaders }));
         }
         return _fetch(args[0], { ...(args[1] || {}), headers });
       }
