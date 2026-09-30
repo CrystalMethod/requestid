@@ -16,5 +16,11 @@
 			"js": ["src/content.js"]
 		}
 	],
+	"web_accessible_resources": [
+		{
+			"resources": ["src/injected.js"],
+			"matches": ["<all_urls>"]
+		}
+	],
 	"offline_enabled": true
 }

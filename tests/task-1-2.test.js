@@ -5,6 +5,10 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import { matchesPattern, matchesAny } from "../src/matcher.js";
 import { generateSuffix, buildRequestId } from "../src/requestId.js";
 
@@ -559,5 +563,451 @@ describe("Integration: Matcher + RequestId", () => {
     assert.strictEqual(ids[2].matches, false);
     assert.ok(ids[0].id.startsWith("req-"), `ID "${ids[0].id}" should start with "req-"`);
     assert.ok(ids[1].id.startsWith("req-"), `ID "${ids[1].id}" should start with "req-"`);
+  });
+});
+
+// ============================================================================
+// PHASE 1.2 (rewrite) — src/content.js chrome.storage ↔ page-world bridge
+//
+// content.js is a classic (non-module) content script: no imports/exports, it
+// references browser globals directly (chrome, document, CustomEvent). To
+// exercise it at runtime we load the source into a fresh vm context with a
+// minimal harness:
+//   - document stub: dispatchEvent capture, addEventListener capture,
+//     createElement returning a script-element stub, head.appendChild capture
+//   - CustomEvent stub capturing type + detail
+//   - chrome stub: storage.local.get (callback), storage.onChanged.addListener,
+//     runtime.getURL
+//
+// Proves at runtime:
+//   - bootstrap injects src/injected.js via a <script> tag and dispatches the
+//     initial "requestid-config" CustomEvent
+//   - dispatchConfig emits the exact event name + detail shape
+//   - loadAndDispatchConfig reads storage and normalizes malformed values
+//   - handleConfigRequest re-dispatches on both handshake event spellings
+//   - storage.onChanged re-dispatches only for meaningful prefix/pattern changes
+//   - fail-open when document.dispatchEvent / createElement are unavailable
+//   - script.onload removes the injected tag
+// ============================================================================
+
+const CONTENT_DIR = path.dirname(fileURLToPath(import.meta.url));
+const CONTENT_ROOT = path.resolve(CONTENT_DIR, "..");
+const CONTENT_SRC = path.join(CONTENT_ROOT, "src", "content.js");
+
+/**
+ * Build a fresh browser-ish sandbox and load content.js into it.
+ *
+ * @param {{prefix?: string, patterns?: string[], store?: object,
+ *          getThrows?: boolean, dispatchThrows?: boolean,
+ *          createElementThrows?: boolean}} opts
+ *   Pass `store` to reuse a backing store across harnesses.
+ */
+function makeContentHarness({
+  prefix,
+  patterns,
+  store: existingStore,
+  getThrows = false,
+  dispatchThrows = false,
+  createElementThrows = false,
+} = {}) {
+  const store = existingStore ?? {};
+  if (prefix !== undefined) store.prefix = prefix;
+  if (patterns !== undefined) store.patterns = patterns;
+
+  const dispatched = [];
+  const docListeners = {};
+  const appendedScripts = [];
+  let onChangedCb = null;
+
+  class CustomEvent {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init?.detail;
+    }
+  }
+
+  const head = {
+    appendChild(node) {
+      appendedScripts.push(node);
+      return node;
+    },
+  };
+
+  const document = {
+    head,
+    documentElement: head,
+    dispatchEvent(event) {
+      if (dispatchThrows) throw new Error("dispatch unavailable");
+      // Normalize the vm-realm detail into a host-realm plain value so
+      // deepStrictEqual does not trip over cross-realm prototypes.
+      dispatched.push({
+        type: event.type,
+        detail:
+          event.detail == null
+            ? event.detail
+            : JSON.parse(JSON.stringify(event.detail)),
+      });
+      return true;
+    },
+    addEventListener(type, cb) {
+      if (!docListeners[type]) docListeners[type] = [];
+      docListeners[type].push(cb);
+    },
+    createElement(tag) {
+      if (createElementThrows) throw new Error("createElement unavailable");
+      return {
+        tagName: String(tag).toUpperCase(),
+        src: "",
+        onload: null,
+        removed: false,
+        remove() {
+          this.removed = true;
+        },
+      };
+    },
+  };
+
+  const chrome = {
+    storage: {
+      local: {
+        get(keys, cb) {
+          if (getThrows) throw new Error("storage unavailable");
+          const arr = Array.isArray(keys) ? keys : [keys];
+          const items = {};
+          for (const k of arr) {
+            if (Object.prototype.hasOwnProperty.call(store, k)) items[k] = store[k];
+          }
+          cb(items);
+        },
+      },
+      onChanged: {
+        addListener(cb) {
+          onChangedCb = cb;
+        },
+      },
+    },
+    runtime: {
+      getURL(p) {
+        return `chrome-extension://test/${p}`;
+      },
+    },
+  };
+
+  const sandbox = { chrome, document, CustomEvent, console };
+  const context = vm.createContext(sandbox);
+  vm.runInContext(fs.readFileSync(CONTENT_SRC, "utf8"), context, {
+    filename: "content.js",
+  });
+
+  return {
+    sandbox,
+    store,
+    dispatched,
+    appendedScripts,
+    docListeners,
+    getOnChanged: () => onChangedCb,
+    fireChange: (changes) => {
+      if (typeof onChangedCb === "function") onChangedCb(changes);
+    },
+    fireDocumentEvent: (type) => {
+      for (const cb of docListeners[type] || []) cb({ type });
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// BOOTSTRAP — injection + initial config dispatch
+// ---------------------------------------------------------------------------
+
+describe("content.js bootstrap: inject page-world script", () => {
+  test("injects exactly one <script> tag pointing at src/injected.js", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: ["https://example.com/*"] });
+    assert.strictEqual(h.appendedScripts.length, 1);
+    const script = h.appendedScripts[0];
+    assert.strictEqual(script.tagName, "SCRIPT");
+    assert.strictEqual(script.src, "chrome-extension://test/src/injected.js");
+  });
+
+  test("script.onload removes the injected tag", () => {
+    const h = makeContentHarness();
+    const script = h.appendedScripts[0];
+    assert.strictEqual(script.removed, false);
+    script.onload();
+    assert.strictEqual(script.removed, true);
+  });
+
+  test("bootstrap dispatches the initial requestid-config event", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: ["https://example.com/*"] });
+    assert.strictEqual(h.dispatched.length, 1);
+    assert.strictEqual(h.dispatched[0].type, "requestid-config");
+    assert.deepStrictEqual(h.dispatched[0].detail, {
+      prefix: "req",
+      patterns: ["https://example.com/*"],
+    });
+  });
+
+  test("bootstrap with empty storage dispatches empty defaults", () => {
+    const h = makeContentHarness();
+    assert.deepStrictEqual(h.dispatched[0].detail, { prefix: "", patterns: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dispatchConfig — exact event name + detail shape
+// ---------------------------------------------------------------------------
+
+describe("dispatchConfig emits the requestid-config CustomEvent", () => {
+  test("dispatches with the exact prefix and patterns passed in", () => {
+    const h = makeContentHarness();
+    h.sandbox.dispatchConfig("abc", ["https://a.com/*", "https://b.com/*"]);
+    const last = h.dispatched[h.dispatched.length - 1];
+    assert.strictEqual(last.type, "requestid-config");
+    assert.deepStrictEqual(last.detail, {
+      prefix: "abc",
+      patterns: ["https://a.com/*", "https://b.com/*"],
+    });
+  });
+
+  test("dispatches empty prefix and empty array verbatim", () => {
+    const h = makeContentHarness();
+    h.sandbox.dispatchConfig("", []);
+    const last = h.dispatched[h.dispatched.length - 1];
+    assert.deepStrictEqual(last.detail, { prefix: "", patterns: [] });
+  });
+
+  test("preserves unicode and special characters in the prefix", () => {
+    const h = makeContentHarness();
+    h.sandbox.dispatchConfig("日本語-x_42", []);
+    const last = h.dispatched[h.dispatched.length - 1];
+    assert.strictEqual(last.detail.prefix, "日本語-x_42");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// loadAndDispatchConfig — storage read + normalization
+// ---------------------------------------------------------------------------
+
+describe("loadAndDispatchConfig reads and normalizes storage", () => {
+  test("re-reads the current store on each call", () => {
+    const h = makeContentHarness({ prefix: "first", patterns: ["https://a.com/*"] });
+    h.store.prefix = "second";
+    h.store.patterns = ["https://b.com/*"];
+    h.sandbox.loadAndDispatchConfig();
+    const last = h.dispatched[h.dispatched.length - 1];
+    assert.deepStrictEqual(last.detail, {
+      prefix: "second",
+      patterns: ["https://b.com/*"],
+    });
+  });
+
+  test("non-string prefix normalizes to empty string", () => {
+    const h = makeContentHarness({ store: { prefix: 12345, patterns: ["https://a.com/*"] } });
+    assert.deepStrictEqual(h.dispatched[0].detail, {
+      prefix: "",
+      patterns: ["https://a.com/*"],
+    });
+  });
+
+  test("null prefix normalizes to empty string", () => {
+    const h = makeContentHarness({ store: { prefix: null, patterns: [] } });
+    assert.strictEqual(h.dispatched[0].detail.prefix, "");
+  });
+
+  test("non-array patterns normalizes to empty array", () => {
+    const h = makeContentHarness({ store: { prefix: "req", patterns: "not-an-array" } });
+    assert.deepStrictEqual(h.dispatched[0].detail.patterns, []);
+  });
+
+  test("missing keys normalize to empty defaults", () => {
+    const h = makeContentHarness({ store: {} });
+    assert.deepStrictEqual(h.dispatched[0].detail, { prefix: "", patterns: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleConfigRequest — handshake from the injected script
+// ---------------------------------------------------------------------------
+
+describe("handleConfigRequest answers the injected-script handshake", () => {
+  test("registers listeners for both handshake event spellings", () => {
+    const h = makeContentHarness();
+    assert.strictEqual((h.docListeners["requestid-config-request"] || []).length, 1);
+    assert.strictEqual((h.docListeners["requestid-request-config"] || []).length, 1);
+  });
+
+  test("requestid-config-request triggers a fresh config dispatch", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: ["https://a.com/*"] });
+    const before = h.dispatched.length;
+    h.fireDocumentEvent("requestid-config-request");
+    assert.strictEqual(h.dispatched.length, before + 1);
+    assert.strictEqual(h.dispatched[h.dispatched.length - 1].type, "requestid-config");
+  });
+
+  test("requestid-request-config triggers a fresh config dispatch", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: ["https://a.com/*"] });
+    const before = h.dispatched.length;
+    h.fireDocumentEvent("requestid-request-config");
+    assert.strictEqual(h.dispatched.length, before + 1);
+  });
+
+  test("handleConfigRequest called directly re-reads storage", () => {
+    const h = makeContentHarness({ prefix: "old", patterns: [] });
+    h.store.prefix = "new";
+    h.sandbox.handleConfigRequest();
+    const last = h.dispatched[h.dispatched.length - 1];
+    assert.strictEqual(last.detail.prefix, "new");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// storage.onChanged — live refresh
+// ---------------------------------------------------------------------------
+
+describe("storage.onChanged re-dispatches on meaningful changes", () => {
+  test("registers exactly one onChanged listener", () => {
+    const h = makeContentHarness();
+    assert.strictEqual(typeof h.getOnChanged(), "function");
+  });
+
+  test("a string prefix change re-dispatches the full config", () => {
+    const h = makeContentHarness({ prefix: "old", patterns: ["https://a.com/*"] });
+    const before = h.dispatched.length;
+    h.store.prefix = "new";
+    h.fireChange({ prefix: { newValue: "new" } });
+    assert.strictEqual(h.dispatched.length, before + 1);
+    assert.deepStrictEqual(h.dispatched[h.dispatched.length - 1].detail, {
+      prefix: "new",
+      patterns: ["https://a.com/*"],
+    });
+  });
+
+  test("an array patterns change re-dispatches the full config", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: ["https://a.com/*"] });
+    const before = h.dispatched.length;
+    h.store.patterns = ["https://b.com/*"];
+    h.fireChange({ patterns: { newValue: ["https://b.com/*"] } });
+    assert.strictEqual(h.dispatched.length, before + 1);
+    assert.deepStrictEqual(h.dispatched[h.dispatched.length - 1].detail, {
+      prefix: "req",
+      patterns: ["https://b.com/*"],
+    });
+  });
+
+  test("an unrelated key change is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({ unrelated: { newValue: "x" } });
+    assert.strictEqual(h.dispatched.length, before);
+  });
+
+  test("an empty changes object is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({});
+    assert.strictEqual(h.dispatched.length, before);
+  });
+
+  test("a null prefix newValue is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({ prefix: { newValue: null } });
+    assert.strictEqual(h.dispatched.length, before);
+  });
+
+  test("a non-string prefix newValue is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({ prefix: { newValue: 42 } });
+    assert.strictEqual(h.dispatched.length, before);
+  });
+
+  test("a non-array patterns newValue is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({ patterns: { newValue: "not-an-array" } });
+    assert.strictEqual(h.dispatched.length, before);
+  });
+
+  test("a prefix removal (newValue undefined) is ignored", () => {
+    const h = makeContentHarness({ prefix: "req", patterns: [] });
+    const before = h.dispatched.length;
+    h.fireChange({ prefix: { oldValue: "req" } });
+    assert.strictEqual(h.dispatched.length, before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FAIL-OPEN — unavailable DOM APIs
+// ---------------------------------------------------------------------------
+
+describe("content.js fails open when DOM APIs are unavailable", () => {
+  test("dispatchConfig does not throw when document.dispatchEvent throws", () => {
+    const h = makeContentHarness({ dispatchThrows: true });
+    let threw = false;
+    try {
+      h.sandbox.dispatchConfig("req", ["https://a.com/*"]);
+    } catch {
+      threw = true;
+    }
+    assert.strictEqual(threw, false);
+    assert.strictEqual(h.dispatched.length, 0);
+  });
+
+  test("injectPageWorldScript does not throw when createElement throws", () => {
+    const h = makeContentHarness({ createElementThrows: true });
+    let threw = false;
+    try {
+      h.sandbox.injectPageWorldScript();
+    } catch {
+      threw = true;
+    }
+    assert.strictEqual(threw, false);
+    assert.strictEqual(h.appendedScripts.length, 0);
+  });
+
+  test("bootstrap still dispatches config when injection is unavailable", () => {
+    const h = makeContentHarness({
+      prefix: "req",
+      patterns: ["https://a.com/*"],
+      createElementThrows: true,
+    });
+    assert.strictEqual(h.appendedScripts.length, 0);
+    assert.deepStrictEqual(h.dispatched[0].detail, {
+      prefix: "req",
+      patterns: ["https://a.com/*"],
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SOURCE CONTRACT — content.js is a classic script (no ESM syntax)
+// ---------------------------------------------------------------------------
+
+describe("content.js source contract", () => {
+  test("contains no import/export statements (classic content script)", () => {
+    const src = fs.readFileSync(CONTENT_SRC, "utf8");
+    assert.ok(!/^\s*import\s/m.test(src), "content.js must not use import");
+    assert.ok(!/^\s*export\s/m.test(src), "content.js must not use export");
+  });
+
+  test("no longer wraps fetch or XMLHttpRequest (moved to injected.js)", () => {
+    const src = fs.readFileSync(CONTENT_SRC, "utf8");
+    assert.ok(
+      !src.includes("XMLHttpRequest.prototype"),
+      "content.js must not patch XMLHttpRequest.prototype",
+    );
+    assert.ok(
+      !/new\s+XMLHttpRequest\b/.test(src),
+      "content.js must not construct XMLHttpRequest",
+    );
+    assert.ok(!/window\.fetch\s*=/.test(src), "content.js must not reassign window.fetch");
+  });
+
+  test("manifest declares src/content.js as a content script", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(CONTENT_ROOT, "manifest.json"), "utf8"),
+    );
+    const jsFiles = (manifest.content_scripts || []).flatMap((cs) => cs.js || []);
+    assert.ok(jsFiles.includes("src/content.js"));
   });
 });
