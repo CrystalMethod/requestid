@@ -170,6 +170,57 @@ function clearInvalidMessage() {
 }
 
 // ---------------------------------------------------------------------------
+// Pattern validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a raw URL pattern string.
+ *
+ * A usable pattern must be non-empty, contain no whitespace, and include a
+ * host component (e.g. `api.example.com`, `*.example.com`, `*`).  The host may
+ * be preceded by an optional `scheme://` prefix.  This mirrors the parsing
+ * performed by src/matcher.js so patterns that could never match are rejected
+ * before they are persisted.
+ *
+ * @param {string} raw - The raw input value.
+ * @returns {string | null} A human-readable error message, or null when valid.
+ */
+function validatePattern(raw) {
+	const pattern = typeof raw === "string" ? raw.trim() : "";
+
+	if (pattern === "") {
+		return "Pattern cannot be empty.";
+	}
+
+	if (/\s/.test(pattern)) {
+		return "Pattern cannot contain spaces.";
+	}
+
+	let remainder = pattern;
+	const schemeIdx = pattern.indexOf("://");
+	if (schemeIdx !== -1) {
+		const scheme = pattern.slice(0, schemeIdx);
+		if (!/^[A-Za-z*][A-Za-z0-9+.-]*$/.test(scheme)) {
+			return "Invalid pattern: unsupported scheme.";
+		}
+		remainder = pattern.slice(schemeIdx + 3);
+	}
+
+	const slashIdx = remainder.indexOf("/");
+	const host = slashIdx === -1 ? remainder : remainder.slice(0, slashIdx);
+
+	if (host === "") {
+		return "Invalid pattern: a host is required (e.g. example.com).";
+	}
+
+	if (!/^[A-Za-z0-9*]([A-Za-z0-9.*:-]*[A-Za-z0-9*])?$/.test(host)) {
+		return "Invalid pattern: host contains unsupported characters.";
+	}
+
+	return null;
+}
+
+// ---------------------------------------------------------------------------
 // Event listeners
 // ---------------------------------------------------------------------------
 
@@ -183,21 +234,23 @@ savePrefixBtn.addEventListener("click", async () => {
 
 /** Add a new pattern. */
 addPatternBtn.addEventListener("click", () => {
-	const pattern = patternInput.value;
+	const raw = patternInput.value;
+	const pattern = typeof raw === "string" ? raw.trim() : "";
 
-	// Reject empty / whitespace-only input.
-	if (!pattern || pattern.trim() === "") {
-		invalidMessage.textContent = "Pattern cannot be empty.";
+	// Reject empty, whitespace, or otherwise malformed input.
+	const validationError = validatePattern(raw);
+	if (validationError) {
+		invalidMessage.textContent = validationError;
 		return;
 	}
 
 	// Reject duplicates.
-	if (currentPatterns.includes(pattern.trim())) {
+	if (currentPatterns.includes(pattern)) {
 		invalidMessage.textContent = "This pattern already exists.";
 		return;
 	}
 
-	currentPatterns.push(pattern.trim());
+	currentPatterns.push(pattern);
 	setPatterns(currentPatterns).catch(() => {});
 	patternInput.value = "";
 	clearInvalidMessage();
