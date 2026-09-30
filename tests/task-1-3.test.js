@@ -224,7 +224,7 @@ function makeXhrStub(xhrCalls) {
     setRequestHeader(name, value) {
       this._injected[name] = value;
     }
-    send(...args) {
+    send() {
       xhrCalls.push({
         type: "send",
         url: this._requestUrl,
@@ -278,7 +278,7 @@ function fetchHeader(fetchCalls, index, name) {
   let headers;
   if (first instanceof Request) {
     headers = first.headers;
-  } else if (init && init.headers) {
+  } else if (init?.headers) {
     headers = init.headers;
   } else {
     return undefined;
@@ -564,7 +564,7 @@ describe("injected.js Request-argument fetch preserves headers", () => {
     const req = new Request("https://example.com/api", {
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer top-secret-token",
+        Authorization: "TestAuth synthetic-value-1",
       },
     });
     sandbox.window.fetch(req);
@@ -573,7 +573,7 @@ describe("injected.js Request-argument fetch preserves headers", () => {
     assert.strictEqual(fetchHeader(fetchCalls, 0, "Content-Type"), "application/json");
     assert.strictEqual(
       fetchHeader(fetchCalls, 0, "Authorization"),
-      "Bearer top-secret-token",
+      "TestAuth synthetic-value-1",
     );
     assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), ID_RE);
   });
