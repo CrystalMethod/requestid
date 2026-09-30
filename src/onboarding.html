@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>RequestID — Get Started</title>
+	<link rel="stylesheet" href="popup.css">
+	<style>
+		body {
+			width: auto;
+			max-width: 560px;
+			margin: 0 auto;
+			padding: 32px 16px;
+		}
+		.onboarding-intro {
+			color: #5f6368;
+			margin-bottom: 20px;
+		}
+		.onboarding-actions {
+			margin-top: 20px;
+			display: flex;
+			justify-content: flex-end;
+		}
+		#finish-btn {
+			background: #1967d2;
+			color: #fff;
+			border-color: #1967d2;
+		}
+		#finish-btn:hover {
+			background: #174ea6;
+		}
+	</style>
+</head>
+<body>
+	<main class="onboarding-card" role="main" aria-labelledby="app-title">
+		<header>
+			<h1 id="app-title">Welcome to RequestID</h1>
+			<p class="onboarding-intro">Set a request-id prefix and choose which URLs should receive the <code>X-Request-ID</code> header. You can change these later from the extension popup.</p>
+		</header>
+
+		<section class="prefix-section" aria-labelledby="prefix-heading">
+			<h2 id="prefix-heading">Prefix</h2>
+			<div class="prefix-row">
+				<label for="prefix-input" class="sr-only">Request-ID prefix</label>
+				<input type="text" id="prefix-input" placeholder="e.g. myapp" autocomplete="off" />
+				<button id="save-prefix-btn" type="button">Save</button>
+			</div>
+			<p id="prefix-warning" class="invalid-message" aria-live="assertive" role="alert"></p>
+		</section>
+
+		<section class="patterns-section" aria-labelledby="patterns-heading">
+			<h2 id="patterns-heading">URL Patterns</h2>
+			<div class="pattern-row">
+				<label for="pattern-input" class="sr-only">Add URL pattern</label>
+				<input type="text" id="pattern-input" placeholder="e.g. *://api.example.com/*" autocomplete="off" />
+				<button id="add-pattern-btn" type="button">Add</button>
+			</div>
+			<p id="invalid-message" class="invalid-message" aria-live="assertive" role="alert"></p>
+			<ul id="pattern-list" class="pattern-list" aria-label="Configured URL patterns"></ul>
+		</section>
+
+		<footer class="status-section" aria-live="polite" role="status">
+			<span id="status-indicator" class="status-indicator"></span>
+		</footer>
+
+		<div class="onboarding-actions">
+			<button id="finish-btn" type="button">Get started</button>
+		</div>
+	</main>
+	<script src="onboarding.js"></script>
+</body>
+</html>
