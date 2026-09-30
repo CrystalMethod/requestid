@@ -11,6 +11,8 @@ When a request URL matches a configured pattern, the extension automatically app
 - **Prefix + unique suffix** — format is `<user-prefix>-<5-char-alphanum-suffix>` (e.g., `req-a3Xk9`).
 - **Fetch + XHR interception** — hooks both `window.fetch` and `XMLHttpRequest`.
 - **Fail-open** — never blocks, cancels, or alters requests even when misconfigured.
+- **Popup configuration panel** — edit the prefix and add/remove URL patterns from the toolbar popup, with inline validation for malformed patterns.
+- **First-run onboarding** — opens automatically on install when no prefix is set, with a warning indicator until a prefix is configured.
 - **Persisted configuration** — prefix and patterns survive browser restarts via `chrome.storage.local`.
 - **Badge indicator** — toolbar icon shows `!` (orange) when prefix is unset, `R` (blue) when active.
 
@@ -25,7 +27,7 @@ When a request URL matches a configured pattern, the extension automatically app
 
 2. Set a prefix on first launch — the extension opens an onboarding tab where you can enter a prefix (e.g. `dev`, `v12345`).
 
-3. Add URL patterns to limit which requests receive the header. Default: empty list (no injection).
+3. Add URL patterns to limit which requests receive the header. Default: empty list (no injection). Reopen the popup from the toolbar icon at any time to change the prefix or patterns.
 
 ### Development setup
 
@@ -39,7 +41,7 @@ npm run lint
 # Fix lint issues automatically
 npm run lint:fix
 
-# Run all tests (123 tests)
+# Run all tests (193 tests)
 npm test
 ```
 
@@ -48,13 +50,15 @@ npm test
 ## Architecture
 
 ```
-manifest.json          — MV3 manifest (background service worker + content script)
+manifest.json          — MV3 manifest (background service worker, content script, action popup)
 src/background.js      — Service worker: onboarding gate, badge maintenance
 src/storage.js         — Persistent storage API: getPrefix/setPrefix, getPatterns/setPatterns
 src/matcher.js         — Pure wildcard URL pattern matcher (no chrome APIs)
 src/requestId.js       — Pure 5-char suffix generator (crypto.getRandomValues preferred)
 src/content.js         — Classic content script: fetch + XHR interceptor (self-contained)
-tests/                 — 123 Node.js tests (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness)
+src/popup.html/js/css  — Toolbar popup: prefix + pattern configuration panel
+src/onboarding.html/js — First-run setup view (prefix + initial patterns)
+tests/                 — 193 Node.js tests (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness, 2.1 popup, 2.2 onboarding)
 ```
 
 ### Module responsibilities
@@ -65,12 +69,14 @@ tests/                 — 123 Node.js tests (1.1 manifest+storage, 1.2 matcher+
 | `matcher.js` | `matchesPattern()`, `matchesAny()` | — | Yes |
 | `requestId.js` | `generateSuffix()`, `buildRequestId()` | — | Yes |
 | `content.js` | — (classic script, no exports) | `chrome.storage.local`, `chrome.storage.onChanged` | No |
-| `background.js` | — (classic service worker) | `chrome.runtime`, `chrome.action` | No |
+| `background.js` | — (classic service worker) | `chrome.runtime`, `chrome.action`, `chrome.tabs` | No |
+| `popup.js` | — (classic script, no exports) | `chrome.storage.local`, `chrome.runtime` | No |
+| `onboarding.js` | — (classic script, no exports) | `chrome.storage.local`, `chrome.runtime` | No |
 
 ### Data flow
 
 ```
-User sets prefix/patterns → chrome.storage.local
+Popup / onboarding sets prefix/patterns → chrome.storage.local
                            ↕ (onChanged listener)
                      content.js local cache
                            ↕ (per request)
@@ -85,11 +91,11 @@ User sets prefix/patterns → chrome.storage.local
 
 ### Prefix
 
-A user-defined string attached to every generated request ID. An empty prefix is allowed and triggers the onboarding badge warning (`!`).
+A user-defined string attached to every generated request ID. Edit it from the toolbar popup (or the first-run onboarding view). An empty prefix is allowed and triggers the warning badge (`!`).
 
 ### URL Patterns
 
-Array of wildcard URL patterns (Chrome MV3 format). Examples:
+Array of wildcard URL patterns (Chrome MV3 format), managed from the popup with add/remove controls. Patterns are validated before they are saved; malformed entries (empty, whitespace, missing host, unsupported scheme) are rejected with an inline message. Examples:
 
 | Pattern | Matches |
 |---------|---------|
@@ -117,13 +123,15 @@ For **XHR**: wraps `XMLHttpRequest.prototype.open` (captures the URL) and `send`
 
 ## Testing
 
-The test suite (123 tests, 41 suites) covers:
+The test suite (193 tests, 58 suites) covers:
 
 | Suite | Scope |
 |-------|-------|
 | `task-1-1.test.js` | Manifest validity, background shell, storage round-trip, adversarial inputs, fail-open without chrome global |
 | `task-1-2.test.js` | Wildcard URL matcher (exact, subdomain, path, query, fragment, regex injection), suffix format/uniqueness, request ID build, integration |
 | `task-1-3.test.js` | Runtime harness: fetch interceptors, XHR interceptors, fail-open, storage onChanged live updates, manifest content_scripts block |
+| `task-2-1.test.js` | Popup configuration panel: prefix save, pattern add/remove, validation, status indicator, storage hydration, manifest popup wiring |
+| `task-2-2.test.js` | First-run onboarding: empty-storage boot, warning indicator, persistence across simulated reload, finish flow, HTML wiring |
 
 ```bash
 npm test        # all tests
