@@ -14,7 +14,8 @@
  * The script is a classic (non-module) IIFE: no imports or exports, because it
  * is loaded via a <script src> tag in the page world. All helpers
  * (generateSuffix, buildRequestId, pattern matching) are inlined from
- * requestId.js and matcher.js.
+ * requestId.js and matcher.js, and the interceptor logic is decomposed into
+ * small, single-purpose functions to keep per-function complexity low.
  *
  * Fail-open: any error leaves the request completely unmodified.
  */
@@ -37,21 +38,32 @@
   const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   const CHARS_LENGTH = CHARS.length;
 
+  /** Generate a suffix from cryptographically strong random values. */
+  function generateWithCrypto() {
+    const values = new Uint32Array(SUFFIX_LENGTH);
+    crypto.getRandomValues(values);
+    let suffix = "";
+    for (let i = 0; i < SUFFIX_LENGTH; i++) {
+      suffix += CHARS[values[i] % CHARS_LENGTH];
+    }
+    return suffix;
+  }
+
+  /** Generate a suffix from Math.random (fallback when crypto is unavailable). */
+  function generateWithMath() {
+    let suffix = "";
+    for (let i = 0; i < SUFFIX_LENGTH; i++) {
+      suffix += CHARS[Math.floor(Math.random() * CHARS_LENGTH)];
+    }
+    return suffix;
+  }
+
   /** Generate a 5-char alphanumeric suffix (crypto preferred, Math.random fallback). */
   function generateSuffix() {
-    let result = "";
     if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      const values = new Uint32Array(SUFFIX_LENGTH);
-      crypto.getRandomValues(values);
-      for (let i = 0; i < SUFFIX_LENGTH; i++) {
-        result += CHARS[values[i] % CHARS_LENGTH];
-      }
-    } else {
-      for (let i = 0; i < SUFFIX_LENGTH; i++) {
-        result += CHARS[Math.floor(Math.random() * CHARS_LENGTH)];
-      }
+      return generateWithCrypto();
     }
-    return result;
+    return generateWithMath();
   }
 
   /** Build `prefix-suffix`, or just the suffix when prefix is empty. */
@@ -64,50 +76,71 @@
   // Pattern matcher (inlined from matcher.js)
   // ---------------------------------------------------------------------------
 
+  /** True when the URL matches at least one configured pattern. */
   function matchesAny(urlStr) {
     if (!Array.isArray(patterns) || patterns.length === 0) {
       return false;
     }
     try {
-      for (let i = 0; i < patterns.length; i++) {
-        if (matchesPattern(urlStr, patterns[i])) return true;
-      }
+      return patterns.some(function (pattern) {
+        return matchesPattern(urlStr, pattern);
+      });
     } catch (_) {
-      /* ignore */
+      return false;
     }
-    return false;
   }
 
+  /** True when the URL matches a single pattern string. */
   function matchesPattern(urlStr, patternStr) {
-    if (!patternStr || !urlStr) return false;
-    const u = parseUrl(urlStr);
-    const p = parsePattern(patternStr);
-    if (!u || !p) return false;
-    if (p.protocol !== "*" && p.protocol !== "" && p.protocol !== u.protocol) return false;
-    if (!matchHost(p.host, u.host)) return false;
-    return matchPath(p.path, u.path);
+    const target = parseMatchTarget(urlStr, patternStr);
+    if (!target) return false;
+    return partsMatch(target.pattern, target.url);
   }
 
+  /** Parse both sides of a match, or null when either side is unusable. */
+  function parseMatchTarget(urlStr, patternStr) {
+    if (!urlStr || !patternStr) return null;
+    const parsedUrl = parseUrl(urlStr);
+    if (!parsedUrl) return null;
+    return { pattern: parsePattern(patternStr), url: parsedUrl };
+  }
+
+  /** Match protocol, host and path of a parsed pattern against a parsed URL. */
+  function partsMatch(pattern, url) {
+    return (
+      protocolMatches(pattern, url) &&
+      matchHost(pattern.host, url.host) &&
+      matchPath(pattern.path, url.path)
+    );
+  }
+
+  /** Protocol matches when the pattern is empty/`*`, else requires an exact scheme. */
+  function protocolMatches(pattern, url) {
+    if (!pattern.protocol || pattern.protocol === "*") return true;
+    return pattern.protocol === url.protocol;
+  }
+
+  /** Parse a URL pattern (`[scheme://]host[/path]`) into structured parts. */
   function parsePattern(raw) {
     let scheme = "*";
     let rest = raw;
-    const idx = raw.indexOf("://");
-    if (idx !== -1) {
-      scheme = raw.slice(0, idx);
-      rest = raw.slice(idx + 3);
+    const schemeIdx = raw.indexOf("://");
+    if (schemeIdx !== -1) {
+      scheme = raw.slice(0, schemeIdx);
+      rest = raw.slice(schemeIdx + 3);
     }
-    const si = rest.indexOf("/");
-    let host, path;
-    if (si === -1) {
-      host = rest;
-      path = "*";
-    } else {
-      host = rest.slice(0, si);
-      path = rest.slice(si);
+    const slashIdx = rest.indexOf("/");
+    if (slashIdx === -1) {
+      return { protocol: scheme, host: rest, path: "*" };
     }
-    return { protocol: scheme, host, path };
+    return {
+      protocol: scheme,
+      host: rest.slice(0, slashIdx),
+      path: rest.slice(slashIdx),
+    };
   }
 
+  /** Parse a full URL string into structured parts, or null when invalid. */
   function parseUrl(urlStr) {
     let obj;
     try {
@@ -122,15 +155,20 @@
     };
   }
 
+  /** Match a URL host against a pattern host (supports `*` and `*.domain`). */
   function matchHost(ph, uh) {
     if (ph === "*") return true;
-    if (ph.startsWith("*.")) {
-      const suf = ph.slice(1);
-      return uh.endsWith(suf) && uh.slice(0, uh.length - suf.length) !== "";
-    }
+    if (ph.startsWith("*.")) return matchSubdomain(ph, uh);
     return ph === uh;
   }
 
+  /** Match `*.domain` patterns: a subdomain must precede the suffix. */
+  function matchSubdomain(ph, uh) {
+    const suffix = ph.slice(1);
+    return uh.endsWith(suffix) && uh.slice(0, uh.length - suffix.length) !== "";
+  }
+
+  /** Match a URL path against a pattern path (`*` becomes a wildcard). */
   function matchPath(pp, up) {
     if (pp === "*") return true;
     try {
@@ -145,94 +183,161 @@
   // Configuration bridge — listen for config from content script
   // ---------------------------------------------------------------------------
 
-  try {
-    document.addEventListener("requestid-config", function (e) {
-      if (e.detail && typeof e.detail === "object") {
-        if (typeof e.detail.prefix === "string") {
-          prefix = e.detail.prefix;
-        }
-        if (Array.isArray(e.detail.patterns)) {
-          patterns = e.detail.patterns;
-        }
-      }
-    });
-  } catch (_) {
-    /* fail-open: config bridge unavailable (non-DOM context) */
+  /** Apply a `requestid-config` event payload to the local prefix/patterns. */
+  function applyConfig(detail) {
+    if (!detail || typeof detail !== "object") return;
+    applyPrefix(detail.prefix);
+    applyPatterns(detail.patterns);
   }
 
-  // Request config from content script on load
-  try {
-    document.dispatchEvent(new CustomEvent("requestid-request-config"));
-  } catch (_) {
-    /* fail-open: content script handshake unavailable */
+  /** Store the configured prefix when it is a string. */
+  function applyPrefix(value) {
+    if (typeof value === "string") {
+      prefix = value;
+    }
+  }
+
+  /** Store the configured pattern list when it is an array. */
+  function applyPatterns(value) {
+    if (Array.isArray(value)) {
+      patterns = value;
+    }
+  }
+
+  /** Register the config listener; fail-open when the DOM API is unavailable. */
+  function listenForConfig() {
+    try {
+      document.addEventListener("requestid-config", function (e) {
+        applyConfig(e.detail);
+      });
+    } catch (_) {
+      /* fail-open: config bridge unavailable (non-DOM context) */
+    }
+  }
+
+  /** Ask the content script for the current config on load. */
+  function requestConfig() {
+    try {
+      document.dispatchEvent(new CustomEvent("requestid-request-config"));
+    } catch (_) {
+      /* fail-open: content script handshake unavailable */
+    }
   }
 
   // ---------------------------------------------------------------------------
   // Fetch interceptor — runs in page world, wraps page-originated fetch
   // ---------------------------------------------------------------------------
 
-  if (typeof window.fetch === "function") {
-    const _fetch = window.fetch.bind(window);
+  /** Extract the request URL from fetch arguments, or "" when unknown. */
+  function extractUrl(args) {
+    const input = args[0];
+    if (input instanceof Request) return input.url;
+    if (typeof input === "string") return input;
+    if (input instanceof URL) return input.href;
+    return "";
+  }
 
+  /** True when a URL should receive an injected request ID. */
+  function shouldIntercept(urlStr) {
+    return Boolean(urlStr) && Boolean(prefix) && matchesAny(urlStr);
+  }
+
+  /** Prepare init headers for injection, returning the usable Headers and a flag. */
+  function resolveFetchHeaders(init) {
+    const headers = init?.headers;
+    if (headers instanceof Headers) return ensureHeaderOnHeaders(headers);
+    if (Array.isArray(headers)) return { headers: headers, inject: false };
+    if (isPlainHeadersObject(headers)) return ensureHeaderOnObject(headers);
+    return resolveMissingHeaders(init);
+  }
+
+  /** True for non-null plain-object header maps (arrays are handled separately). */
+  function isPlainHeadersObject(headers) {
+    return Boolean(headers) && typeof headers === "object";
+  }
+
+  /** Decide what to do when init carries no usable Headers instance. */
+  function resolveMissingHeaders(init) {
+    if (!hasHeadersKey(init)) return buildFreshHeaders();
+    return { headers: init?.headers, inject: false };
+  }
+
+  /** Whether init declares a `headers` property (even when null/undefined). */
+  function hasHeadersKey(init) {
+    return Boolean(init) && "headers" in init;
+  }
+
+  /** Add the request ID to existing Headers when not already present. */
+  function ensureHeaderOnHeaders(headers) {
+    if (!headers.has("X-Request-ID")) {
+      headers.set("X-Request-ID", buildRequestId());
+    }
+    return { headers: headers, inject: true };
+  }
+
+  /** Convert a plain-object headers init to Headers and add the request ID. */
+  function ensureHeaderOnObject(headersObj) {
+    const headers = new Headers(headersObj);
+    if (!hasRequestIdHeader(headersObj)) {
+      headers.set("X-Request-ID", buildRequestId());
+    }
+    return { headers: headers, inject: true };
+  }
+
+  /** Case-insensitive check for an existing X-Request-ID key. */
+  function hasRequestIdHeader(headers) {
+    return Object.keys(headers).some(function (key) {
+      return key.toLowerCase() === "x-request-id";
+    });
+  }
+
+  /** Build a fresh Headers object carrying an injected request ID. */
+  function buildFreshHeaders() {
+    const headers = new Headers();
+    headers.set("X-Request-ID", buildRequestId());
+    return { headers: headers, inject: true };
+  }
+
+  /** Apply the resolved headers to a fetch call. */
+  function fetchWithRequestId(originalFetch, args) {
+    const resolved = resolveFetchHeaders(args[1]);
+    if (args[0] instanceof Request && resolved.inject) {
+      return fetchRequestWithHeaders(originalFetch, args, resolved.headers);
+    }
+    return originalFetch(args[0], { ...(args[1] || {}), headers: resolved.headers });
+  }
+
+  /** Clone a Request with explicit init headers, respecting user-provided headers. */
+  function fetchRequestWithHeaders(originalFetch, args, headers) {
+    if (args[1] && "headers" in args[1]) {
+      return originalFetch(new Request(args[0], { headers: headers }));
+    }
+    return fetchRequestPreservingHeaders(originalFetch, args);
+  }
+
+  /** Clone a Request, merging an injected request ID into its own headers. */
+  function fetchRequestPreservingHeaders(originalFetch, args) {
+    const reqHeaders = new Headers(args[0].headers);
+    if (!reqHeaders.has("X-Request-ID")) {
+      reqHeaders.set("X-Request-ID", buildRequestId());
+    }
+    return originalFetch(new Request(args[0], { headers: reqHeaders }));
+  }
+
+  /** Wrap window.fetch; fail-open to the original fetch on any error. */
+  function installFetchInterceptor() {
+    if (typeof window.fetch !== "function") return;
+    const originalFetch = window.fetch.bind(window);
     window.fetch = async function (...args) {
       try {
-        let urlStr = "";
-        if (args[0] instanceof Request) {
-          urlStr = args[0].url;
-        } else if (typeof args[0] === "string") {
-          urlStr = args[0];
-        } else if (args[0] instanceof URL) {
-          urlStr = args[0].href;
-        }
-
-        if (urlStr && matchesAny(urlStr) && prefix) {
-          let headers = args[1]?.headers;
-          let injectIntoRequestHeaders = true;
-
-          if (headers instanceof Headers) {
-            if (!headers.has("X-Request-ID")) {
-              headers.set("X-Request-ID", buildRequestId());
-            }
-          } else if (Array.isArray(headers)) {
-            // Array headers — hard to modify safely; let request proceed
-            injectIntoRequestHeaders = false;
-          } else if (headers && typeof headers === "object" && !Array.isArray(headers)) {
-            // Plain object headers
-            const hasHeader = Object.keys(headers).some(
-              (k) => k.toLowerCase() === "x-request-id",
-            );
-            if (!hasHeader) {
-              headers = new Headers(headers);
-              headers.set("X-Request-ID", buildRequestId());
-            } else {
-              headers = new Headers(headers);
-            }
-          } else if (!("headers" in (args[1] || {}))) {
-            // No headers in init — create new Headers with injected header
-            headers = new Headers();
-            headers.set("X-Request-ID", buildRequestId());
-          } else {
-            // headers explicitly null/undefined — respect user intent
-            injectIntoRequestHeaders = false;
-          }
-
-          if (args[0] instanceof Request && injectIntoRequestHeaders) {
-            if (args[1] && "headers" in args[1]) {
-              return _fetch(new Request(args[0], { headers }));
-            }
-            // No init headers — preserve original Request headers
-            const reqHeaders = new Headers(args[0].headers);
-            if (!reqHeaders.has("X-Request-ID")) {
-              reqHeaders.set("X-Request-ID", buildRequestId());
-            }
-            return _fetch(new Request(args[0], { headers: reqHeaders }));
-          }
-          return _fetch(args[0], { ...(args[1] || {}), headers });
+        const urlStr = extractUrl(args);
+        if (shouldIntercept(urlStr)) {
+          return fetchWithRequestId(originalFetch, args);
         }
       } catch (_) {
         /* fail-open */
       }
-      return _fetch.apply(window, args);
+      return originalFetch.apply(window, args);
     };
   }
 
@@ -240,39 +345,42 @@
   // XHR interceptor — runs in page world, wraps page-originated XHR
   // ---------------------------------------------------------------------------
 
-  if (typeof window.XMLHttpRequest === "function") {
-    const _xhrOpen = XMLHttpRequest.prototype.open;
-    const _xhrSend = XMLHttpRequest.prototype.send;
+  /** Inject the request ID header on an XHR, fail-open on invalid state. */
+  function injectRequestIdHeader(xhr) {
+    try {
+      if (shouldIntercept(xhr._requestUrl) && !xhr._headerInjected) {
+        xhr.setRequestHeader("X-Request-ID", buildRequestId());
+        xhr._headerInjected = true;
+      }
+    } catch (_) {
+      /* fail-open: request already sent or state invalid */
+    }
+  }
+
+  /** Wrap XMLHttpRequest open/send to inject the header before dispatch. */
+  function installXhrInterceptor() {
+    if (typeof window.XMLHttpRequest !== "function") return;
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
 
     XMLHttpRequest.prototype.open = function (method, url, ...rest) {
       this._requestUrl = url;
       this._headerInjected = false;
-      try {
-        return _xhrOpen.apply(this, [method, url, ...rest]);
-      } catch (_) {
-        return _xhrOpen.apply(this, [method, url, ...rest]);
-      }
+      return originalOpen.apply(this, [method, url, ...rest]);
     };
 
     XMLHttpRequest.prototype.send = function (...args) {
-      try {
-        const urlStr = this._requestUrl;
-        if (urlStr && matchesAny(urlStr) && prefix && !this._headerInjected) {
-          try {
-            this.setRequestHeader("X-Request-ID", buildRequestId());
-            this._headerInjected = true;
-          } catch (_) {
-            /* request already sent or state invalid */
-          }
-        }
-      } catch (_) {
-        /* fail-open */
-      }
-      try {
-        return _xhrSend.apply(this, args);
-      } catch (_) {
-        return _xhrSend.apply(this, args);
-      }
+      injectRequestIdHeader(this);
+      return originalSend.apply(this, args);
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Bootstrap
+  // ---------------------------------------------------------------------------
+
+  listenForConfig();
+  requestConfig();
+  installFetchInterceptor();
+  installXhrInterceptor();
 })();
