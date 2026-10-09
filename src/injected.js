@@ -239,7 +239,12 @@
 
   /** True when a URL should receive an injected request ID. */
   function shouldIntercept(urlStr) {
-    return Boolean(urlStr) && Boolean(prefix) && matchesAny(urlStr);
+    if (!urlStr || !prefix) return false;
+    try {
+      return matchesAny(new URL(urlStr, document.baseURI).href);
+    } catch (_) {
+      return false;
+    }
   }
 
   function resolveFetchHeaders(init) {

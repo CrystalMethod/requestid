@@ -32,6 +32,7 @@ import path from "node:path";
 import { before, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { matchesPattern } from "../src/matcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -81,6 +82,7 @@ function makeDom({ createElementThrows = false, dispatchThrows = false } = {}) {
 	};
 
 	const document = {
+		baseURI: "https://example.test/",
 		head,
 		documentElement: head,
 		addEventListener(type, cb) {
@@ -918,21 +920,101 @@ describe("injected.js fetch response stream passthrough", () => {
 });
 
 describe("injected.js Angular-style relative fetch URLs", () => {
+	test("relative URL interception matches the canonical matcher", async () => {
+		const cases = [
+			["https://api.example.test/app/", "https://api.example.test/*", true],
+			["https://api.example.test/app/", "https://example.test/*", false],
+			["https://api.example.test/app/", "https://*.example.test/*", true],
+			["https://example.test/app/", "https://*.example.test/*", false],
+		];
+
+		for (const [baseURI, pattern, expected] of cases) {
+			const { dom, sandbox, fetchCalls } = makeInjected();
+			dom.document.baseURI = baseURI;
+			dom.fire("requestid-config", { prefix: "ng", patterns: [pattern] });
+			sandbox.window.fetch("/v1/orders");
+			await Promise.resolve();
+
+			const resolvedURL = new URL("/v1/orders", baseURI).href;
+			const canonicalMatch = matchesPattern(resolvedURL, pattern);
+			const injected = fetchHeader(fetchCalls, 0, "X-Request-ID") !== undefined;
+			assert.strictEqual(canonicalMatch, expected);
+			assert.strictEqual(injected, canonicalMatch);
+		}
+	});
+
 	test("matches relative URL against document base and leaves other hosts unchanged", async () => {
 		const { dom, sandbox, fetchCalls } = makeInjected();
 		dom.document.baseURI = "https://angular-api.example.test/app/";
+		const pattern = "https://angular-api.example.test/*";
 		dom.fire("requestid-config", {
 			prefix: "ng",
-			patterns: ["https://angular-api.example.test/*"],
+			patterns: [pattern],
 		});
 		sandbox.window.fetch("/v1/orders");
 		sandbox.window.fetch("https://third-party.example.test/v1/orders");
 		await Promise.resolve();
 
+		assert.strictEqual(
+			matchesPattern(new URL("/v1/orders", dom.document.baseURI).href, pattern),
+			true,
+		);
 		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), /^ng-[A-Za-z0-9]{5}$/);
 		assert.strictEqual(fetchCalls[0][0], "/v1/orders");
 		assert.strictEqual(fetchHeader(fetchCalls, 1, "X-Request-ID"), undefined);
 		assert.strictEqual(fetchCalls[1][0], "https://third-party.example.test/v1/orders");
+	});
+
+	test("relative fetch matching preserves exact-host boundaries", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "https://api.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://example.test/*"],
+		});
+		sandbox.window.fetch("/v1/orders");
+		await Promise.resolve();
+
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Request-ID"), undefined);
+	});
+
+	test("relative fetch matching preserves subdomain wildcard boundaries", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "https://api.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://*.example.test/*"],
+		});
+		sandbox.window.fetch("/v1/orders");
+		await Promise.resolve();
+
+		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), /^ng-[A-Za-z0-9]{5}$/);
+	});
+
+	test("relative fetch matching does not let subdomain wildcard match base host", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "https://example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://*.example.test/*"],
+		});
+		sandbox.window.fetch("/v1/orders");
+		await Promise.resolve();
+
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Request-ID"), undefined);
+	});
+
+	test("relative fetch with malformed document base passes through unchanged", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "http://[malformed";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://angular-api.example.test/*"],
+		});
+		await assert.doesNotReject(sandbox.window.fetch("/v1/orders"));
+
+		assert.strictEqual(fetchCalls[0][0], "/v1/orders");
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Request-ID"), undefined);
 	});
 
 	test("malformed fetch URL passes through without injecting or throwing", async () => {
@@ -995,9 +1077,10 @@ describe("injected.js XHR interception", () => {
 	test("resolves Angular-style relative XHR URL and forwards open URL unchanged", () => {
 		const { dom, sandbox, xhrCalls } = makeInjected();
 		dom.document.baseURI = "https://angular-api.example.test/app/";
+		const pattern = "https://angular-api.example.test/*";
 		dom.fire("requestid-config", {
 			prefix: "ng",
-			patterns: ["https://angular-api.example.test/*"],
+			patterns: [pattern],
 		});
 		const xhr = new sandbox.XMLHttpRequest();
 		xhr.open("GET", "/v1/orders");
@@ -1008,8 +1091,27 @@ describe("injected.js XHR interception", () => {
 			method: "GET",
 			url: "/v1/orders",
 		});
+		assert.strictEqual(
+			matchesPattern(new URL("/v1/orders", dom.document.baseURI).href, pattern),
+			true,
+		);
 		const send = xhrCalls.find((call) => call.type === "send");
 		assert.match(send.injected["X-Request-ID"], /^ng-[A-Za-z0-9]{5}$/);
+	});
+
+	test("relative XHR matching preserves subdomain wildcard boundaries", () => {
+		const { dom, sandbox, xhrCalls } = makeInjected();
+		dom.document.baseURI = "https://example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://*.example.test/*"],
+		});
+		const xhr = new sandbox.XMLHttpRequest();
+		xhr.open("GET", "/v1/orders");
+		xhr.send();
+
+		assert.strictEqual(xhrCalls[0].url, "/v1/orders");
+		assert.strictEqual(xhrCalls[1].injected["X-Request-ID"], undefined);
 	});
 
 	test("malformed XHR URL forwards unchanged without injecting a header", () => {
