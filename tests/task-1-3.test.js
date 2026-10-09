@@ -688,7 +688,7 @@ describe("injected.js Request/init fetch semantics", () => {
 		let observedSignal;
 		const fetchStub = (request) => {
 			observedSignal = request.signal;
-			return new Promise((resolve, reject) => {
+			return new Promise((_, reject) => {
 				request.signal.addEventListener(
 					"abort",
 					() => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
