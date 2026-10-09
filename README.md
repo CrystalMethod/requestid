@@ -41,7 +41,7 @@ npm run lint
 # Fix lint issues automatically
 npm run lint:fix
 
-# Run all tests (193 tests)
+# Run all tests (262 tests, 73 suites)
 npm test
 ```
 
@@ -55,10 +55,11 @@ src/background.js      — Service worker: onboarding gate, badge maintenance
 src/storage.js         — Persistent storage API: getPrefix/setPrefix, getPatterns/setPatterns
 src/matcher.js         — Pure wildcard URL pattern matcher (no chrome APIs)
 src/requestId.js       — Pure 5-char suffix generator (crypto.getRandomValues preferred)
-src/content.js         — Classic content script: fetch + XHR interceptor (self-contained)
+src/injected.js        — Page (MAIN world) script: fetch + XHR interceptor, registered statically at document_start
+src/content.js         — Isolated content script: storage bridge, sends prefix/patterns to the page script
 src/popup.html/js/css  — Toolbar popup: prefix + pattern configuration panel
 src/onboarding.html/js — First-run setup view (prefix + initial patterns)
-tests/                 — 193 Node.js tests (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness, 2.1 popup, 2.2 onboarding)
+tests/                 — 262 Node.js tests, 73 suites (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness, 2.1 popup, 2.2 onboarding)
 ```
 
 ### Module responsibilities
@@ -106,6 +107,33 @@ Array of wildcard URL patterns (Chrome MV3 format), managed from the popup with 
 
 **Important:** Exact host patterns do **not** match subdomains. Use `*.example.com` for subdomain matching.
 
+### Backend patterns and CORS
+
+The extension has no built-in backend hosts. The default pattern list is empty; you add every pattern yourself. Relative request URLs (`/api/x`) are resolved against the page base URL for matching only. The URL sent on the wire is not rewritten.
+
+Same-origin Angular backend (relative URL, nothing cross-origin), served at `https://app.example.com`:
+
+```ts
+this.http.get('/api/users');        // HttpClient uses XHR by default
+fetch('/api/users');
+```
+
+Pattern: `https://app.example.com/api/*`
+
+Separately configured API origin, for example `https://api.example.com`:
+
+```ts
+this.http.get('https://api.example.com/v1/users');
+```
+
+Pattern: `https://api.example.com/*`
+
+Pattern cautions: `*` as host or `*://*/*` tags every request, including third-party ones. Keep patterns as narrow as your backend allows.
+
+CORS: the extension does not bypass CORS and does not control server responses. On a cross-origin request, the custom `X-Request-ID` header makes the browser send an `OPTIONS` preflight first. The backend must answer the preflight with an allowed origin, allowed method, and `Access-Control-Allow-Headers` that includes `X-Request-ID`. Otherwise the browser blocks the request. Same-origin requests need no preflight.
+
+Scope: only `fetch` and `XMLHttpRequest` are intercepted. Media elements, `EventSource`, and `WebSocket` are not intercepted. Media playback was not tested.
+
 ## How It Works
 
 ### Header injection
@@ -121,9 +149,22 @@ For **XHR**: wraps `XMLHttpRequest.prototype.open` (captures the URL) and `send`
 - If `chrome.storage.local` fails, getters return defaults (`""`, `[]`) without throwing.
 - If any injection step throws, the original request continues unchanged.
 
+## Chrome Diagnostics
+
+Timing model: `src/injected.js` is registered statically in the `MAIN` world at `document_start`, so the hooks exist before app scripts run. This does not depend on a page-inserted `<script>`, and it worked under page CSP `script-src 'self'` in Chrome for Testing 155.0.8059.39. Config (prefix and patterns) arrives separately and asynchronously from `chrome.storage.local` through `src/content.js`. A request made before config arrives passes through with no `X-Request-ID` (fail-open). Requests after config arrives get IDs.
+
+If no ID appears, check in order:
+
+1. `chrome://extensions/`: RequestID is enabled (and allowed in incognito if used). Open the popup: prefix is set and a pattern matches the request URL.
+2. Page DevTools Console: look for script or CSP errors mentioning the extension.
+3. Network tab, filter `Fetch/XHR`: pick the request, open Headers, look for `X-Request-ID: <prefix>-<5 chars>` under Request Headers. Missing on only the first requests after load means config was not ready yet.
+4. Cross-origin only: look for an `OPTIONS` row before the request. Check its response has `Access-Control-Allow-Origin`, `Access-Control-Allow-Methods`, and `Access-Control-Allow-Headers` including `X-Request-ID`. A failed preflight shows as a CORS error in Console.
+
+Browser evidence: static injection, ID on fetch and XHR, wrong-host pass-through, empty-prefix pass-through, and CSP `script-src 'self'` were observed in Chrome for Testing 155.0.8059.39 (see `.omo/evidence/requestid-streaming-angular/task-4.md`). Media playback was not tested.
+
 ## Testing
 
-The test suite (193 tests, 58 suites) covers:
+The test suite (262 tests, 73 suites per `npm test`) covers:
 
 | Suite | Scope |
 |-------|-------|
@@ -139,7 +180,7 @@ npm test        # all tests
 
 ## Known Limitations
 
-- **CORS preflight**: The extension does not handle CORS preflight (OPTIONS) requests. Backends must declare `X-Request-ID` in their `Access-Control-Allow-Headers` CORS policy.
+- **CORS preflight**: The extension does not handle or bypass CORS preflight (OPTIONS) requests. Cross-origin backends must allow the origin, method, and `X-Request-ID` in `Access-Control-Allow-Headers`.
 - **Chromium only**: Built for Chrome MV3; not tested on Firefox, Edge, or other browsers.
 - **Incognito**: Works in incognito if "Allow in incognito" is enabled for the extension.
 - **Single suffix**: The 5-character suffix (62^5 ≈ 916M combinations) is not cryptographically unique across the internet; it is intended for local development log correlation.
