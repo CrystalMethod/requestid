@@ -22,33 +22,33 @@
  * @returns {boolean}
  */
 export function matchesPattern(urlString, patternString) {
-  if (!patternString || !urlString) {
-    return false;
-  }
+	if (!patternString || !urlString) {
+		return false;
+	}
 
-  const parsedPattern = parsePattern(patternString);
-  const parsedUrl = parseUrl(urlString);
+	const parsedPattern = parsePattern(patternString);
+	const parsedUrl = parseUrl(urlString);
 
-  if (!parsedPattern || !parsedUrl) {
-    return false;
-  }
+	if (!parsedPattern || !parsedUrl) {
+		return false;
+	}
 
-  // Protocol: `*` or empty matches any scheme; otherwise exact match.
-  if (
-    parsedPattern.protocol !== "*" &&
-    parsedPattern.protocol !== "" &&
-    parsedPattern.protocol !== parsedUrl.protocol
-  ) {
-    return false;
-  }
+	// Protocol: `*` or empty matches any scheme; otherwise exact match.
+	if (
+		parsedPattern.protocol !== "*" &&
+		parsedPattern.protocol !== "" &&
+		parsedPattern.protocol !== parsedUrl.protocol
+	) {
+		return false;
+	}
 
-  // Host with subdomain-aware wildcard logic.
-  if (!matchHost(parsedPattern.host, parsedUrl.host)) {
-    return false;
-  }
+	// Host with subdomain-aware wildcard logic.
+	if (!matchHost(parsedPattern.host, parsedUrl.host)) {
+		return false;
+	}
 
-  // Path (including query + fragment) with `*` wildcard.
-  return matchPath(parsedPattern.path, parsedUrl.path);
+	// Path (including query + fragment) with `*` wildcard.
+	return matchPath(parsedPattern.path, parsedUrl.path);
 }
 
 /**
@@ -59,10 +59,10 @@ export function matchesPattern(urlString, patternString) {
  * @returns {boolean}
  */
 export function matchesAny(urlString, patternList) {
-  if (!Array.isArray(patternList) || patternList.length === 0) {
-    return false;
-  }
-  return patternList.some((p) => matchesPattern(urlString, p));
+	if (!Array.isArray(patternList) || patternList.length === 0) {
+		return false;
+	}
+	return patternList.some((p) => matchesPattern(urlString, p));
 }
 
 // ---------------------------------------------------------------------------
@@ -81,30 +81,30 @@ export function matchesAny(urlString, patternList) {
  * @returns {{ protocol: string, host: string, path: string } | null}
  */
 function parsePattern(patternString) {
-  let scheme = "*";
-  let remainder = patternString;
+	let scheme = "*";
+	let remainder = patternString;
 
-  // Extract protocol (e.g. `https://`, `*://`, `ftp://`).
-  const schemeIdx = patternString.indexOf("://");
-  if (schemeIdx !== -1) {
-    scheme = patternString.slice(0, schemeIdx);
-    remainder = patternString.slice(schemeIdx + 3);
-  }
+	// Extract protocol (e.g. `https://`, `*://`, `ftp://`).
+	const schemeIdx = patternString.indexOf("://");
+	if (schemeIdx !== -1) {
+		scheme = patternString.slice(0, schemeIdx);
+		remainder = patternString.slice(schemeIdx + 3);
+	}
 
-  // Split host from path: first `/` after scheme is the delimiter.
-  const slashIdx = remainder.indexOf("/");
-  let host;
-  let path;
+	// Split host from path: first `/` after scheme is the delimiter.
+	const slashIdx = remainder.indexOf("/");
+	let host;
+	let path;
 
-  if (slashIdx === -1) {
-    host = remainder;
-    path = "*";
-  } else {
-    host = remainder.slice(0, slashIdx);
-    path = remainder.slice(slashIdx); // includes leading `/`
-  }
+	if (slashIdx === -1) {
+		host = remainder;
+		path = "*";
+	} else {
+		host = remainder.slice(0, slashIdx);
+		path = remainder.slice(slashIdx); // includes leading `/`
+	}
 
-  return { protocol: scheme, host, path };
+	return { protocol: scheme, host, path };
 }
 
 /**
@@ -114,21 +114,21 @@ function parsePattern(patternString) {
  * @returns {{ protocol: string, host: string, path: string } | null}
  */
 function parseUrl(urlString) {
-  let urlObj;
-  try {
-    urlObj = new URL(urlString);
-  } catch {
-    return null;
-  }
+	let urlObj;
+	try {
+		urlObj = new URL(urlString);
+	} catch {
+		return null;
+	}
 
-  // Reconstruct the full path including search + hash for matching.
-  const fullPath = urlObj.pathname + urlObj.search + urlObj.hash;
+	// Reconstruct the full path including search + hash for matching.
+	const fullPath = urlObj.pathname + urlObj.search + urlObj.hash;
 
-  return {
-    protocol: urlObj.protocol.slice(0, -1), // strip trailing `:`
-    host: urlObj.hostname,
-    path: fullPath,
-  };
+	return {
+		protocol: urlObj.protocol.slice(0, -1), // strip trailing `:`
+		host: urlObj.hostname,
+		path: fullPath,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -148,20 +148,23 @@ function parseUrl(urlString) {
  * @returns {boolean}
  */
 function matchHost(patternHost, urlHost) {
-  if (patternHost === "*") {
-    return true;
-  }
+	if (patternHost === "*") {
+		return true;
+	}
 
-  // Subdomain wildcard: `*.example.com` matches any subdomain (e.g. `foo.example.com`,
-  // `foo.bar.example.com`) but NOT `example.com` itself.
-  if (patternHost.startsWith("*.")) {
-    const suffix = patternHost.slice(1); // strip `*` → `.example.com`
-    // urlHost must end with `.example.com` AND have something before the dot.
-    return urlHost.endsWith(suffix) && urlHost.slice(0, urlHost.length - suffix.length) !== "";
-  }
+	// Subdomain wildcard: `*.example.com` matches any subdomain (e.g. `foo.example.com`,
+	// `foo.bar.example.com`) but NOT `example.com` itself.
+	if (patternHost.startsWith("*.")) {
+		const suffix = patternHost.slice(1); // strip `*` → `.example.com`
+		// urlHost must end with `.example.com` AND have something before the dot.
+		return (
+			urlHost.endsWith(suffix) &&
+			urlHost.slice(0, urlHost.length - suffix.length) !== ""
+		);
+	}
 
-  // Exact host match (no wildcards).
-  return patternHost === urlHost;
+	// Exact host match (no wildcards).
+	return patternHost === urlHost;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,18 +182,18 @@ function matchHost(patternHost, urlHost) {
  * @returns {boolean}
  */
 function matchPath(patternPath, urlPath) {
-  if (patternPath === "*") {
-    return true;
-  }
+	if (patternPath === "*") {
+		return true;
+	}
 
-  // Build a regex: escape regex-special chars except `*`, then turn `*` into `.*`.
-  const regexStr = patternPath
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*");
+	// Build a regex: escape regex-special chars except `*`, then turn `*` into `.*`.
+	const regexStr = patternPath
+		.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*/g, ".*");
 
-  try {
-    return new RegExp("^" + regexStr + "$").test(urlPath);
-  } catch {
-    return false;
-  }
+	try {
+		return new RegExp("^" + regexStr + "$").test(urlPath);
+	} catch {
+		return false;
+	}
 }

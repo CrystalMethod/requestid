@@ -24,25 +24,27 @@
  * @param {string[]} configPatterns
  */
 function dispatchConfig(configPrefix, configPatterns) {
-  try {
-    document.dispatchEvent(
-      new CustomEvent("requestid-config", {
-        detail: { prefix: configPrefix, patterns: configPatterns },
-      }),
-    );
-  } catch (_) {
-    /* fail-open: non-DOM context */
-  }
+	try {
+		document.dispatchEvent(
+			new CustomEvent("requestid-config", {
+				detail: { prefix: configPrefix, patterns: configPatterns },
+			}),
+		);
+	} catch (_) {
+		/* fail-open: non-DOM context */
+	}
 }
 
 /** Read prefix + patterns from chrome.storage.local and forward them. */
 function loadAndDispatchConfig() {
-  chrome.storage.local.get(["prefix", "patterns"], (items) => {
-    const configPrefix =
-      items.prefix != null && typeof items.prefix === "string" ? items.prefix : "";
-    const configPatterns = Array.isArray(items.patterns) ? items.patterns : [];
-    dispatchConfig(configPrefix, configPatterns);
-  });
+	chrome.storage.local.get(["prefix", "patterns"], (items) => {
+		const configPrefix =
+			items.prefix != null && typeof items.prefix === "string"
+				? items.prefix
+				: "";
+		const configPatterns = Array.isArray(items.patterns) ? items.patterns : [];
+		dispatchConfig(configPrefix, configPatterns);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ function loadAndDispatchConfig() {
  * injected script's "requestid-request-config" handshake.
  */
 function handleConfigRequest() {
-  loadAndDispatchConfig();
+	loadAndDispatchConfig();
 }
 
 document.addEventListener("requestid-config-request", handleConfigRequest);
@@ -66,12 +68,13 @@ document.addEventListener("requestid-request-config", handleConfigRequest);
 // ---------------------------------------------------------------------------
 
 chrome.storage.onChanged.addListener((changes) => {
-  const prefixChanged =
-    changes.prefix?.newValue != null && typeof changes.prefix.newValue === "string";
-  const patternsChanged = Array.isArray(changes.patterns?.newValue);
-  if (!prefixChanged && !patternsChanged) return;
-  // Re-read the full config so both fields stay consistent.
-  loadAndDispatchConfig();
+	const prefixChanged =
+		changes.prefix?.newValue != null &&
+		typeof changes.prefix.newValue === "string";
+	const patternsChanged = Array.isArray(changes.patterns?.newValue);
+	if (!prefixChanged && !patternsChanged) return;
+	// Re-read the full config so both fields stay consistent.
+	loadAndDispatchConfig();
 });
 
 // ---------------------------------------------------------------------------

@@ -1,15 +1,15 @@
 {
-  "name": "requestid",
-  "version": "1.0.0",
-  "description": "Chrome MV3 extension that injects X-Request-ID: <prefix>-<random> into backend requests",
-  "type": "module",
-  "private": true,
-  "scripts": {
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "test": "node --test tests/*.test.js"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "2.5.14"
-  }
+	"name": "requestid",
+	"version": "1.0.0",
+	"description": "Chrome MV3 extension that injects X-Request-ID: <prefix>-<random> into backend requests",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"lint": "biome check .",
+		"lint:fix": "biome check --write .",
+		"test": "node --test tests/*.test.js"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.14"
+	}
 }

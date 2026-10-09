@@ -32,13 +32,13 @@ const CHARS_LENGTH = CHARS.length;
  * @returns {string}
  */
 export function generateSuffix() {
-  let chars = "";
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    chars = generateWithCrypto();
-  } else {
-    chars = generateWithMath();
-  }
-  return chars;
+	let chars = "";
+	if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+		chars = generateWithCrypto();
+	} else {
+		chars = generateWithMath();
+	}
+	return chars;
 }
 
 /**
@@ -48,11 +48,11 @@ export function generateSuffix() {
  * @returns {string} `prefix-suffix` format; empty prefix yields just the suffix.
  */
 export function buildRequestId(prefix) {
-  const suffix = generateSuffix();
-  if (prefix === undefined || prefix === null || prefix === "") {
-    return suffix;
-  }
-  return `${prefix}-${suffix}`;
+	const suffix = generateSuffix();
+	if (prefix === undefined || prefix === null || prefix === "") {
+		return suffix;
+	}
+	return `${prefix}-${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,13 +66,13 @@ export function buildRequestId(prefix) {
  * @returns {string}
  */
 function generateWithCrypto() {
-  const values = new Uint32Array(SUFFIX_LENGTH);
-  crypto.getRandomValues(values);
-  let result = "";
-  for (let i = 0; i < SUFFIX_LENGTH; i++) {
-    result += CHARS[values[i] % CHARS_LENGTH];
-  }
-  return result;
+	const values = new Uint32Array(SUFFIX_LENGTH);
+	crypto.getRandomValues(values);
+	let result = "";
+	for (let i = 0; i < SUFFIX_LENGTH; i++) {
+		result += CHARS[values[i] % CHARS_LENGTH];
+	}
+	return result;
 }
 
 /**
@@ -81,9 +81,9 @@ function generateWithCrypto() {
  * @returns {string}
  */
 function generateWithMath() {
-  let result = "";
-  for (let i = 0; i < SUFFIX_LENGTH; i++) {
-    result += CHARS[Math.floor(Math.random() * CHARS_LENGTH)];
-  }
-  return result;
+	let result = "";
+	for (let i = 0; i < SUFFIX_LENGTH; i++) {
+		result += CHARS[Math.floor(Math.random() * CHARS_LENGTH)];
+	}
+	return result;
 }

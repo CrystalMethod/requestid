@@ -385,7 +385,9 @@ describe("saving settings persists and survives a simulated reload", () => {
 		const second = makeHarness({ store: first.store });
 		await second.fireDOMContentLoaded();
 
-		assert.deepStrictEqual(plain(second.store.patterns), ["https://drop.com/*"]);
+		assert.deepStrictEqual(plain(second.store.patterns), [
+			"https://drop.com/*",
+		]);
 		assert.strictEqual(second.elements["pattern-list"].children.length, 1);
 		assert.strictEqual(
 			second.elements["pattern-list"].children[0].children[0].textContent,
@@ -645,7 +647,13 @@ describe("onboarding.html wiring", () => {
 
 	test("onboarding.js never uses innerHTML/outerHTML", () => {
 		const src = fs.readFileSync(ONBOARDING_SRC, "utf8");
-		assert.ok(!src.includes("innerHTML"), "onboarding.js must not use innerHTML");
-		assert.ok(!src.includes("outerHTML"), "onboarding.js must not use outerHTML");
+		assert.ok(
+			!src.includes("innerHTML"),
+			"onboarding.js must not use innerHTML",
+		);
+		assert.ok(
+			!src.includes("outerHTML"),
+			"onboarding.js must not use outerHTML",
+		);
 	});
 });

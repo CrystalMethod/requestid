@@ -314,7 +314,10 @@ describe("content.js is a thin bridge (no direct fetch/XHR wrapping)", () => {
 	});
 
 	test("keeps page-world interception in the statically registered script", () => {
-		assert.doesNotMatch(CONTENT_SOURCE, /createElement\(\s*["']script["']\s*\)/);
+		assert.doesNotMatch(
+			CONTENT_SOURCE,
+			/createElement\(\s*["']script["']\s*\)/,
+		);
 	});
 
 	test("does NOT wrap window.fetch directly", () => {
@@ -424,7 +427,7 @@ describe("content.js live refresh: chrome.storage.onChanged re-dispatches config
 	});
 });
 
-	describe("content.js fail-open when DOM APIs are unavailable", () => {
+describe("content.js fail-open when DOM APIs are unavailable", () => {
 	test("does not throw when document.dispatchEvent throws", () => {
 		assert.doesNotThrow(() => {
 			makeContent({ store: { prefix: "req" }, dispatchThrows: true });
@@ -631,7 +634,10 @@ describe("injected.js Request/init fetch semantics", () => {
 			method: "POST",
 			body: "angular-payload",
 			duplex: "half",
-			headers: { "Content-Type": "application/json", "X-Request-ID": "request-id" },
+			headers: {
+				"Content-Type": "application/json",
+				"X-Request-ID": "request-id",
+			},
 			signal: requestSignal,
 			mode: "same-origin",
 			cache: "force-cache",
@@ -724,10 +730,10 @@ describe("injected.js Request/init fetch semantics", () => {
 		await Promise.resolve();
 
 		const forwardedRequest = fetchCalls[0][0];
-		assert.deepStrictEqual([...forwardedRequest.headers.keys()], [
-			"x-request-id",
-			"x-trace",
-		]);
+		assert.deepStrictEqual(
+			[...forwardedRequest.headers.keys()],
+			["x-request-id", "x-trace"],
+		);
 		assert.match(forwardedRequest.headers.get("X-Request-ID"), ID_RE);
 		assert.strictEqual(forwardedRequest.headers.get("X-Trace"), "trace-id");
 		assert.strictEqual(forwardedRequest.headers.get("Content-Type"), null);
@@ -776,49 +782,52 @@ describe("injected.js Request/init fetch semantics", () => {
 
 	for (const signalSource of ["Request", "init"]) {
 		test(`uses ${signalSource} AbortSignal and rejects when it aborts`, async () => {
-		const controller = new AbortController();
-		let observedSignal;
-		const fetchStub = (request) => {
-			observedSignal = request.signal;
-			return new Promise((_, reject) => {
-				request.signal.addEventListener(
-					"abort",
-					() => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
-					{ once: true },
-				);
+			const controller = new AbortController();
+			let observedSignal;
+			const fetchStub = (request) => {
+				observedSignal = request.signal;
+				return new Promise((_, reject) => {
+					request.signal.addEventListener(
+						"abort",
+						() =>
+							reject(
+								Object.assign(new Error("aborted"), { name: "AbortError" }),
+							),
+						{ once: true },
+					);
+				});
+			};
+			const { dom, sandbox } = makeInjected({ fetchStub });
+			dom.fire("requestid-config", {
+				prefix: "req",
+				patterns: ["https://example.com/*"],
 			});
-		};
-		const { dom, sandbox } = makeInjected({ fetchStub });
-		dom.fire("requestid-config", {
-			prefix: "req",
-			patterns: ["https://example.com/*"],
-		});
-		const request = new Request("https://example.com/api", {
-			signal: signalSource === "Request" ? controller.signal : undefined,
-		});
-		const fetchPromise = sandbox.window.fetch(
-			request,
-			signalSource === "init"
-				? { headers: {}, signal: controller.signal }
-				: undefined,
-		);
-		const abortTimer = setTimeout(() => controller.abort(), 0);
-		let timeout;
-		const outcome = await Promise.race([
-			fetchPromise.then(
-				() => "resolved",
-				(error) => error.name,
-			),
-			new Promise((resolve) => {
-				timeout = setTimeout(() => resolve("pending"), 50);
-			}),
-		]);
-		clearTimeout(abortTimer);
-		clearTimeout(timeout);
-		assert.deepStrictEqual(
-			{ signalAborted: observedSignal.aborted, outcome },
-			{ signalAborted: true, outcome: "AbortError" },
-		);
+			const request = new Request("https://example.com/api", {
+				signal: signalSource === "Request" ? controller.signal : undefined,
+			});
+			const fetchPromise = sandbox.window.fetch(
+				request,
+				signalSource === "init"
+					? { headers: {}, signal: controller.signal }
+					: undefined,
+			);
+			const abortTimer = setTimeout(() => controller.abort(), 0);
+			let timeout;
+			const outcome = await Promise.race([
+				fetchPromise.then(
+					() => "resolved",
+					(error) => error.name,
+				),
+				new Promise((resolve) => {
+					timeout = setTimeout(() => resolve("pending"), 50);
+				}),
+			]);
+			clearTimeout(abortTimer);
+			clearTimeout(timeout);
+			assert.deepStrictEqual(
+				{ signalAborted: observedSignal.aborted, outcome },
+				{ signalAborted: true, outcome: "AbortError" },
+			);
 		});
 	}
 
@@ -935,7 +944,9 @@ describe("injected.js fetch response stream passthrough", () => {
 			prefix: "req",
 			patterns: ["https://example.com/*"],
 		});
-		const returnedResponse = await sandbox.window.fetch("https://example.com/media");
+		const returnedResponse = await sandbox.window.fetch(
+			"https://example.com/media",
+		);
 
 		assert.strictEqual(returnedResponse, response);
 		assert.strictEqual(returnedResponse.body, stream);
@@ -953,7 +964,8 @@ describe("injected.js fetch response stream passthrough", () => {
 		let enqueueChunk;
 		const stream = new ReadableStream({
 			start(controller) {
-				enqueueChunk = (value) => controller.enqueue(new TextEncoder().encode(value));
+				enqueueChunk = (value) =>
+					controller.enqueue(new TextEncoder().encode(value));
 			},
 		});
 		const response = new Response(stream);
@@ -964,7 +976,9 @@ describe("injected.js fetch response stream passthrough", () => {
 			prefix: "req",
 			patterns: ["https://example.com/*"],
 		});
-		const returnedResponse = await sandbox.window.fetch("https://example.com/media");
+		const returnedResponse = await sandbox.window.fetch(
+			"https://example.com/media",
+		);
 		const reader = returnedResponse.body.getReader();
 		let resolved = false;
 		const firstRead = reader.read().then((chunk) => {
@@ -1027,10 +1041,16 @@ describe("injected.js Angular-style relative fetch URLs", () => {
 			matchesPattern(new URL("/v1/orders", dom.document.baseURI).href, pattern),
 			true,
 		);
-		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), /^ng-[A-Za-z0-9]{5}$/);
+		assert.match(
+			fetchHeader(fetchCalls, 0, "X-Request-ID"),
+			/^ng-[A-Za-z0-9]{5}$/,
+		);
 		assert.strictEqual(fetchCalls[0][0], "/v1/orders");
 		assert.strictEqual(fetchHeader(fetchCalls, 1, "X-Request-ID"), undefined);
-		assert.strictEqual(fetchCalls[1][0], "https://third-party.example.test/v1/orders");
+		assert.strictEqual(
+			fetchCalls[1][0],
+			"https://third-party.example.test/v1/orders",
+		);
 	});
 
 	test("relative fetch matching preserves exact-host boundaries", async () => {
@@ -1056,7 +1076,10 @@ describe("injected.js Angular-style relative fetch URLs", () => {
 		sandbox.window.fetch("/v1/orders");
 		await Promise.resolve();
 
-		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), /^ng-[A-Za-z0-9]{5}$/);
+		assert.match(
+			fetchHeader(fetchCalls, 0, "X-Request-ID"),
+			/^ng-[A-Za-z0-9]{5}$/,
+		);
 	});
 
 	test("relative fetch matching does not let subdomain wildcard match base host", async () => {
