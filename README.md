@@ -41,7 +41,7 @@ npm run lint
 # Fix lint issues automatically
 npm run lint:fix
 
-# Run all tests (262 tests, 73 suites)
+# Run all tests (265 tests, 73 suites)
 npm test
 ```
 
@@ -59,7 +59,7 @@ src/injected.js        — Page (MAIN world) script: fetch + XHR interceptor, re
 src/content.js         — Isolated content script: storage bridge, sends prefix/patterns to the page script
 src/popup.html/js/css  — Toolbar popup: prefix + pattern configuration panel
 src/onboarding.html/js — First-run setup view (prefix + initial patterns)
-tests/                 — 262 Node.js tests, 73 suites (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness, 2.1 popup, 2.2 onboarding)
+tests/                 — 265 Node.js tests, 73 suites (1.1 manifest+storage, 1.2 matcher+generator, 1.3 runtime harness, 2.1 popup, 2.2 onboarding)
 ```
 
 ### Module responsibilities
@@ -147,7 +147,7 @@ For **XHR**: wraps `XMLHttpRequest.prototype.open` (captures the URL) and `send`
 - If the prefix is empty, no header is injected; requests pass through unmodified.
 - If the pattern list is empty, no header is injected.
 - If `chrome.storage.local` fails, getters return defaults (`""`, `[]`) without throwing.
-- If any injection step throws, the original request continues unchanged.
+- If request-ID generation fails, the original request continues unchanged. Invalid application fetch arguments still reject with native Fetch behavior.
 
 ## Chrome Diagnostics
 
@@ -164,7 +164,7 @@ Browser evidence: static injection, ID on fetch and XHR, wrong-host pass-through
 
 ## Testing
 
-The test suite (262 tests, 73 suites per `npm test`) covers:
+The test suite (265 tests, 73 suites per `npm test`) covers:
 
 | Suite | Scope |
 |-------|-------|
