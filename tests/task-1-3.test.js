@@ -639,6 +639,169 @@ describe("injected.js Request-argument fetch preserves headers", () => {
 	});
 });
 
+describe("injected.js Request/init fetch semantics", () => {
+	test("preserves Request body and native init overrides while adding request ID", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api", {
+			method: "POST",
+			body: "angular-payload",
+			duplex: "half",
+			cache: "force-cache",
+			credentials: "include",
+			redirect: "manual",
+		});
+		sandbox.window.fetch(request, {
+			headers: { "X-Request-ID": "caller-init-id" },
+			cache: "no-store",
+			credentials: "omit",
+			redirect: "follow",
+		});
+		await Promise.resolve();
+
+		const forwardedRequest = fetchCalls[0][0];
+		assert.deepStrictEqual(
+			{
+				method: forwardedRequest.method,
+				body: await forwardedRequest.text(),
+				cache: forwardedRequest.cache,
+				credentials: forwardedRequest.credentials,
+				redirect: forwardedRequest.redirect,
+				requestId: forwardedRequest.headers.get("X-Request-ID"),
+			},
+			{
+				method: "POST",
+				body: "angular-payload",
+				cache: "no-store",
+				credentials: "omit",
+				redirect: "follow",
+				requestId: "caller-init-id",
+			},
+		);
+	});
+
+	test("uses Request/init AbortSignal and rejects when that signal aborts", async () => {
+		const initController = new AbortController();
+		let observedSignal;
+		const fetchStub = (request) => {
+			observedSignal = request.signal;
+			return new Promise((resolve, reject) => {
+				request.signal.addEventListener(
+					"abort",
+					() => reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+					{ once: true },
+				);
+			});
+		};
+		const { dom, sandbox } = makeInjected({ fetchStub });
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api");
+		const fetchPromise = sandbox.window.fetch(request, {
+			headers: {},
+			signal: initController.signal,
+		});
+		const abortTimer = setTimeout(() => initController.abort(), 0);
+		let timeout;
+		const outcome = await Promise.race([
+			fetchPromise.then(
+				() => "resolved",
+				(error) => error.name,
+			),
+			new Promise((resolve) => {
+				timeout = setTimeout(() => resolve("pending"), 50);
+			}),
+		]);
+		clearTimeout(abortTimer);
+		clearTimeout(timeout);
+		assert.deepStrictEqual(
+			{ signalAborted: observedSignal.aborted, outcome },
+			{ signalAborted: true, outcome: "AbortError" },
+		);
+	});
+});
+
+describe("injected.js fetch response stream passthrough", () => {
+	test("returns original Response and leaves ReadableStream chunks readable", async () => {
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("first-"));
+				controller.enqueue(new TextEncoder().encode("second"));
+				controller.close();
+			},
+		});
+		const response = new Response(stream, { status: 206 });
+		const { dom, sandbox } = makeInjected({
+			fetchStub: () => Promise.resolve(response),
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const returnedResponse = await sandbox.window.fetch("https://example.com/media");
+
+		assert.strictEqual(returnedResponse, response);
+		assert.strictEqual(returnedResponse.body, stream);
+		const reader = returnedResponse.body.getReader();
+		const firstChunk = await reader.read();
+		const secondChunk = await reader.read();
+		assert.strictEqual(new TextDecoder().decode(firstChunk.value), "first-");
+		assert.strictEqual(new TextDecoder().decode(secondChunk.value), "second");
+		assert.strictEqual(firstChunk.done, false);
+		assert.strictEqual(secondChunk.done, false);
+		assert.strictEqual((await reader.read()).done, true);
+	});
+});
+
+describe("injected.js Angular-style relative fetch URLs", () => {
+	test("matches relative URL against document base and leaves other hosts unchanged", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "https://angular-api.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://angular-api.example.test/*"],
+		});
+		sandbox.window.fetch("/v1/orders");
+		sandbox.window.fetch("https://third-party.example.test/v1/orders");
+		await Promise.resolve();
+
+		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), /^ng-[A-Za-z0-9]{5}$/);
+		assert.strictEqual(fetchCalls[0][0], "/v1/orders");
+		assert.strictEqual(fetchHeader(fetchCalls, 1, "X-Request-ID"), undefined);
+		assert.strictEqual(fetchCalls[1][0], "https://third-party.example.test/v1/orders");
+	});
+
+	test("malformed fetch URL passes through without injecting or throwing", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://angular-api.example.test/*"],
+		});
+		await assert.doesNotReject(sandbox.window.fetch("http://[malformed"));
+		assert.strictEqual(fetchCalls[0][0], "http://[malformed");
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Request-ID"), undefined);
+	});
+
+	test("relative fetch URL does not match a configured host different from document base", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.document.baseURI = "https://wrong-host.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://configured-api.example.test/*"],
+		});
+		sandbox.window.fetch("/v1/orders");
+		await Promise.resolve();
+
+		assert.strictEqual(fetchCalls[0][0], "/v1/orders");
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Request-ID"), undefined);
+	});
+});
+
 // ============================================================================
 // INJECTED.JS — XHR INTERCEPTION
 // ============================================================================
@@ -668,6 +831,55 @@ describe("injected.js XHR interception", () => {
 		xhr.send();
 		const send = xhrCalls.find((c) => c.type === "send");
 		assert.strictEqual(send.injected["X-Request-ID"], undefined);
+	});
+
+	test("resolves Angular-style relative XHR URL and forwards open URL unchanged", () => {
+		const { dom, sandbox, xhrCalls } = makeInjected();
+		dom.document.baseURI = "https://angular-api.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://angular-api.example.test/*"],
+		});
+		const xhr = new sandbox.XMLHttpRequest();
+		xhr.open("GET", "/v1/orders");
+		xhr.send();
+
+		assert.deepStrictEqual(xhrCalls[0], {
+			type: "open",
+			method: "GET",
+			url: "/v1/orders",
+		});
+		const send = xhrCalls.find((call) => call.type === "send");
+		assert.match(send.injected["X-Request-ID"], /^ng-[A-Za-z0-9]{5}$/);
+	});
+
+	test("malformed XHR URL forwards unchanged without injecting a header", () => {
+		const { dom, sandbox, xhrCalls } = makeInjected();
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const xhr = new sandbox.XMLHttpRequest();
+		xhr.open("GET", "http://[malformed");
+		xhr.send();
+
+		assert.strictEqual(xhrCalls[0].url, "http://[malformed");
+		assert.strictEqual(xhrCalls[1].injected["X-Request-ID"], undefined);
+	});
+
+	test("relative XHR URL does not match a configured host different from document base", () => {
+		const { dom, sandbox, xhrCalls } = makeInjected();
+		dom.document.baseURI = "https://wrong-host.example.test/app/";
+		dom.fire("requestid-config", {
+			prefix: "ng",
+			patterns: ["https://configured-api.example.test/*"],
+		});
+		const xhr = new sandbox.XMLHttpRequest();
+		xhr.open("GET", "/v1/orders");
+		xhr.send();
+
+		assert.strictEqual(xhrCalls[0].url, "/v1/orders");
+		assert.strictEqual(xhrCalls[1].injected["X-Request-ID"], undefined);
 	});
 
 	test("a reused XHR injects a fresh header on each open+send cycle", () => {
