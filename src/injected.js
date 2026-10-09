@@ -17,7 +17,8 @@
  * requestId.js and matcher.js, and the interceptor logic is decomposed into
  * small, single-purpose functions to keep per-function complexity low.
  *
- * Fail-open: any error leaves the request completely unmodified.
+ * Fail-open: instrumentation failures leave the request unmodified; invalid
+ * application fetch arguments retain native Fetch rejection behavior.
  */
 
 (function () {
@@ -250,7 +251,13 @@
   function resolveFetchHeaders(init) {
     const headers = new Headers(init?.headers);
     if (!headers.has("X-Request-ID")) {
-      headers.set("X-Request-ID", buildRequestId());
+      let requestId;
+      try {
+        requestId = buildRequestId();
+      } catch (_) {
+        return null;
+      }
+      headers.set("X-Request-ID", requestId);
     }
     return { headers };
   }
@@ -260,20 +267,33 @@
     if (args[0] instanceof Request) {
       return fetchRequestWithHeaders(originalFetch, args);
     }
+    if (args[1]?.headers === null) {
+      return originalFetch(args[0], args[1]);
+    }
     const resolved = resolveFetchHeaders(args[1]);
+    if (!resolved) return originalFetch(args[0], args[1]);
     return originalFetch(args[0], { ...(args[1] || {}), headers: resolved.headers });
   }
 
   function fetchRequestWithHeaders(originalFetch, args) {
     const [request, init] = args;
-    const headers = new Headers(request.headers);
-    if (init?.headers != null) {
-      new Headers(init.headers).forEach((value, name) => {
-        headers.set(name, value);
-      });
+    if (request.bodyUsed && init?.headers !== null) {
+      return originalFetch.apply(window, args);
     }
+    if (init?.headers === null) {
+      return originalFetch(new Request(request, init));
+    }
+    const headers = new Headers(
+      init?.headers === undefined ? request.headers : init.headers,
+    );
     if (!headers.has("X-Request-ID")) {
-      headers.set("X-Request-ID", buildRequestId());
+      let requestId;
+      try {
+        requestId = buildRequestId();
+      } catch (_) {
+        return originalFetch.apply(window, args);
+      }
+      headers.set("X-Request-ID", requestId);
     }
     return originalFetch(new Request(request, { ...(init || {}), headers: headers }));
   }
@@ -283,14 +303,8 @@
     if (typeof window.fetch !== "function") return;
     const originalFetch = window.fetch.bind(window);
     window.fetch = async function (...args) {
-      try {
-        const urlStr = extractUrl(args);
-        if (shouldIntercept(urlStr)) {
-          return fetchWithRequestId(originalFetch, args);
-        }
-      } catch (_) {
-        /* fail-open */
-      }
+      const urlStr = extractUrl(args);
+      if (shouldIntercept(urlStr)) return fetchWithRequestId(originalFetch, args);
       return originalFetch.apply(window, args);
     };
   }

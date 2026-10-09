@@ -696,7 +696,7 @@ describe("injected.js Request/init fetch semantics", () => {
 				referrerPolicy: "same-origin",
 				integrity: "",
 				keepalive: false,
-				contentType: "application/json",
+				contentType: null,
 				initTrace: "init-value",
 				requestId: "caller-init-id",
 			},
@@ -705,6 +705,73 @@ describe("injected.js Request/init fetch semantics", () => {
 		assert.strictEqual(initHeaders.get("X-Init-Trace"), "init-value");
 		assert.strictEqual(request.headers.get("X-Request-ID"), "request-id");
 		assert.strictEqual(request.headers.get("X-Init-Trace"), null);
+	});
+
+	test("init headers replace source Request headers when no caller request ID is supplied", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api", {
+			headers: {
+				"Content-Type": "application/json",
+				"X-Request-ID": "source-id",
+			},
+		});
+		const initHeaders = new Headers({ "X-Trace": "trace-id" });
+		sandbox.window.fetch(request, { headers: initHeaders });
+		await Promise.resolve();
+
+		const forwardedRequest = fetchCalls[0][0];
+		assert.deepStrictEqual([...forwardedRequest.headers.keys()], [
+			"x-request-id",
+			"x-trace",
+		]);
+		assert.match(forwardedRequest.headers.get("X-Request-ID"), ID_RE);
+		assert.strictEqual(forwardedRequest.headers.get("X-Trace"), "trace-id");
+		assert.strictEqual(forwardedRequest.headers.get("Content-Type"), null);
+		assert.strictEqual(request.headers.get("X-Request-ID"), "source-id");
+		assert.strictEqual(request.headers.get("Content-Type"), "application/json");
+		assert.strictEqual(initHeaders.has("X-Request-ID"), false);
+		assert.strictEqual(initHeaders.get("X-Trace"), "trace-id");
+	});
+
+	test("rejects null headers with native TypeError without consuming Request body or fetching", async () => {
+		const controlRequest = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		let nativeError;
+		try {
+			new Request(controlRequest, { headers: null });
+		} catch (error) {
+			nativeError = error;
+		}
+
+		const fetchCalls = [];
+		const { dom, sandbox } = makeInjected({
+			fetchStub: (...args) => {
+				fetchCalls.push(args);
+				return fetch(...args);
+			},
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+
+		await assert.rejects(sandbox.window.fetch(request, { headers: null }), {
+			name: nativeError.name,
+		});
+		assert.strictEqual(fetchCalls.length, 0);
+		assert.strictEqual(request.bodyUsed, false);
 	});
 
 	for (const signalSource of ["Request", "init"]) {
@@ -809,6 +876,45 @@ describe("injected.js Request/init fetch semantics", () => {
 		});
 		assert.strictEqual(fetchCalls.length, 0);
 		assert.strictEqual(request.bodyUsed, false);
+	});
+
+	test("rejects invalid header values without retrying fetch", async () => {
+		const request = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		let nativeError;
+		try {
+			new Request(request, { headers: { "X-Trace": "invalid\nvalue" } });
+		} catch (error) {
+			nativeError = error;
+		}
+
+		const fetchCalls = [];
+		const { dom, sandbox } = makeInjected({
+			fetchStub: (...args) => {
+				fetchCalls.push(args);
+				return fetch(...args);
+			},
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const sourceRequest = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		const init = { headers: { "X-Trace": "invalid\nvalue" } };
+
+		await assert.rejects(sandbox.window.fetch(sourceRequest, init), {
+			name: nativeError.name,
+		});
+		assert.strictEqual(fetchCalls.length, 0);
+		assert.strictEqual(sourceRequest.bodyUsed, false);
+		assert.strictEqual(init.headers["X-Trace"], "invalid\nvalue");
 	});
 });
 
