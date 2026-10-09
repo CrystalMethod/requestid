@@ -242,86 +242,35 @@
     return Boolean(urlStr) && Boolean(prefix) && matchesAny(urlStr);
   }
 
-  /** Prepare init headers for injection, returning the usable Headers and a flag. */
   function resolveFetchHeaders(init) {
-    const headers = init?.headers;
-    if (headers instanceof Headers) return ensureHeaderOnHeaders(headers);
-    if (Array.isArray(headers)) return { headers: headers, inject: false };
-    if (isPlainHeadersObject(headers)) return ensureHeaderOnObject(headers);
-    return resolveMissingHeaders(init);
-  }
-
-  /** True for non-null plain-object header maps (arrays are handled separately). */
-  function isPlainHeadersObject(headers) {
-    return Boolean(headers) && typeof headers === "object";
-  }
-
-  /** Decide what to do when init carries no usable Headers instance. */
-  function resolveMissingHeaders(init) {
-    if (!hasHeadersKey(init)) return buildFreshHeaders();
-    return { headers: init?.headers, inject: false };
-  }
-
-  /** Whether init declares a `headers` property (even when null/undefined). */
-  function hasHeadersKey(init) {
-    return Boolean(init) && "headers" in init;
-  }
-
-  /** Add the request ID to existing Headers when not already present. */
-  function ensureHeaderOnHeaders(headers) {
+    const headers = new Headers(init?.headers);
     if (!headers.has("X-Request-ID")) {
       headers.set("X-Request-ID", buildRequestId());
     }
-    return { headers: headers, inject: true };
-  }
-
-  /** Convert a plain-object headers init to Headers and add the request ID. */
-  function ensureHeaderOnObject(headersObj) {
-    const headers = new Headers(headersObj);
-    if (!hasRequestIdHeader(headersObj)) {
-      headers.set("X-Request-ID", buildRequestId());
-    }
-    return { headers: headers, inject: true };
-  }
-
-  /** Case-insensitive check for an existing X-Request-ID key. */
-  function hasRequestIdHeader(headers) {
-    return Object.keys(headers).some(function (key) {
-      return key.toLowerCase() === "x-request-id";
-    });
-  }
-
-  /** Build a fresh Headers object carrying an injected request ID. */
-  function buildFreshHeaders() {
-    const headers = new Headers();
-    headers.set("X-Request-ID", buildRequestId());
-    return { headers: headers, inject: true };
+    return { headers };
   }
 
   /** Apply the resolved headers to a fetch call. */
   function fetchWithRequestId(originalFetch, args) {
-    const resolved = resolveFetchHeaders(args[1]);
-    if (args[0] instanceof Request && resolved.inject) {
-      return fetchRequestWithHeaders(originalFetch, args, resolved.headers);
+    if (args[0] instanceof Request) {
+      return fetchRequestWithHeaders(originalFetch, args);
     }
+    const resolved = resolveFetchHeaders(args[1]);
     return originalFetch(args[0], { ...(args[1] || {}), headers: resolved.headers });
   }
 
-  /** Clone a Request with explicit init headers, respecting user-provided headers. */
-  function fetchRequestWithHeaders(originalFetch, args, headers) {
-    if (args[1] && "headers" in args[1]) {
-      return originalFetch(new Request(args[0], { headers: headers }));
+  function fetchRequestWithHeaders(originalFetch, args) {
+    const [request, init] = args;
+    const headers = new Headers(request.headers);
+    if (init?.headers != null) {
+      new Headers(init.headers).forEach((value, name) => {
+        headers.set(name, value);
+      });
     }
-    return fetchRequestPreservingHeaders(originalFetch, args);
-  }
-
-  /** Clone a Request, merging an injected request ID into its own headers. */
-  function fetchRequestPreservingHeaders(originalFetch, args) {
-    const reqHeaders = new Headers(args[0].headers);
-    if (!reqHeaders.has("X-Request-ID")) {
-      reqHeaders.set("X-Request-ID", buildRequestId());
+    if (!headers.has("X-Request-ID")) {
+      headers.set("X-Request-ID", buildRequestId());
     }
-    return originalFetch(new Request(args[0], { headers: reqHeaders }));
+    return originalFetch(new Request(request, { ...(init || {}), headers: headers }));
   }
 
   /** Wrap window.fetch; fail-open to the original fetch on any error. */

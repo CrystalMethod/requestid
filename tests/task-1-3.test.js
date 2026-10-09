@@ -637,6 +637,22 @@ describe("injected.js Request-argument fetch preserves headers", () => {
 		);
 		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), ID_RE);
 	});
+
+	test("does not mutate supplied Headers init", async () => {
+		const { dom, sandbox, fetchCalls } = makeInjected();
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const headers = new Headers({ "X-Trace": "caller-value" });
+		sandbox.window.fetch("https://example.com/api", { headers });
+		await Promise.resolve();
+
+		assert.strictEqual(fetchHeader(fetchCalls, 0, "X-Trace"), "caller-value");
+		assert.match(fetchHeader(fetchCalls, 0, "X-Request-ID"), ID_RE);
+		assert.strictEqual(headers.get("X-Trace"), "caller-value");
+		assert.strictEqual(headers.has("X-Request-ID"), false);
+	});
 });
 
 describe("injected.js Request/init fetch semantics", () => {
@@ -646,19 +662,39 @@ describe("injected.js Request/init fetch semantics", () => {
 			prefix: "req",
 			patterns: ["https://example.com/*"],
 		});
+		const requestSignal = new AbortController().signal;
 		const request = new Request("https://example.com/api", {
 			method: "POST",
 			body: "angular-payload",
 			duplex: "half",
+			headers: { "Content-Type": "application/json", "X-Request-ID": "request-id" },
+			signal: requestSignal,
+			mode: "same-origin",
 			cache: "force-cache",
 			credentials: "include",
 			redirect: "manual",
+			referrer: "https://example.com/source",
+			referrerPolicy: "no-referrer",
+			integrity: "sha256-test",
+			keepalive: true,
+		});
+		const initSignal = new AbortController().signal;
+		const initHeaders = new Headers({
+			"X-Request-ID": "caller-init-id",
+			"X-Init-Trace": "init-value",
 		});
 		sandbox.window.fetch(request, {
-			headers: { "X-Request-ID": "caller-init-id" },
+			headers: initHeaders,
+			method: "PUT",
+			mode: "cors",
 			cache: "no-store",
 			credentials: "omit",
 			redirect: "follow",
+			referrer: "https://example.com/init-source",
+			referrerPolicy: "same-origin",
+			integrity: "",
+			keepalive: false,
+			signal: initSignal,
 		});
 		await Promise.resolve();
 
@@ -667,24 +703,49 @@ describe("injected.js Request/init fetch semantics", () => {
 			{
 				method: forwardedRequest.method,
 				body: await forwardedRequest.text(),
+				signal: forwardedRequest.signal.aborted,
+				requestSignalAborted: requestSignal.aborted,
+				mode: forwardedRequest.mode,
+				duplex: forwardedRequest.duplex,
 				cache: forwardedRequest.cache,
 				credentials: forwardedRequest.credentials,
 				redirect: forwardedRequest.redirect,
+				referrer: forwardedRequest.referrer,
+				referrerPolicy: forwardedRequest.referrerPolicy,
+				integrity: forwardedRequest.integrity,
+				keepalive: forwardedRequest.keepalive,
+				contentType: forwardedRequest.headers.get("Content-Type"),
+				initTrace: forwardedRequest.headers.get("X-Init-Trace"),
 				requestId: forwardedRequest.headers.get("X-Request-ID"),
 			},
 			{
-				method: "POST",
+				method: "PUT",
 				body: "angular-payload",
+				signal: false,
+				requestSignalAborted: false,
+				mode: "cors",
+				duplex: "half",
 				cache: "no-store",
 				credentials: "omit",
 				redirect: "follow",
+				referrer: "https://example.com/init-source",
+				referrerPolicy: "same-origin",
+				integrity: "",
+				keepalive: false,
+				contentType: "application/json",
+				initTrace: "init-value",
 				requestId: "caller-init-id",
 			},
 		);
+		assert.strictEqual(initHeaders.get("X-Request-ID"), "caller-init-id");
+		assert.strictEqual(initHeaders.get("X-Init-Trace"), "init-value");
+		assert.strictEqual(request.headers.get("X-Request-ID"), "request-id");
+		assert.strictEqual(request.headers.get("X-Init-Trace"), null);
 	});
 
-	test("uses Request/init AbortSignal and rejects when that signal aborts", async () => {
-		const initController = new AbortController();
+	for (const signalSource of ["Request", "init"]) {
+		test(`uses ${signalSource} AbortSignal and rejects when it aborts`, async () => {
+		const controller = new AbortController();
 		let observedSignal;
 		const fetchStub = (request) => {
 			observedSignal = request.signal;
@@ -701,12 +762,16 @@ describe("injected.js Request/init fetch semantics", () => {
 			prefix: "req",
 			patterns: ["https://example.com/*"],
 		});
-		const request = new Request("https://example.com/api");
-		const fetchPromise = sandbox.window.fetch(request, {
-			headers: {},
-			signal: initController.signal,
+		const request = new Request("https://example.com/api", {
+			signal: signalSource === "Request" ? controller.signal : undefined,
 		});
-		const abortTimer = setTimeout(() => initController.abort(), 0);
+		const fetchPromise = sandbox.window.fetch(
+			request,
+			signalSource === "init"
+				? { headers: {}, signal: controller.signal }
+				: undefined,
+		);
+		const abortTimer = setTimeout(() => controller.abort(), 0);
 		let timeout;
 		const outcome = await Promise.race([
 			fetchPromise.then(
@@ -723,6 +788,63 @@ describe("injected.js Request/init fetch semantics", () => {
 			{ signalAborted: observedSignal.aborted, outcome },
 			{ signalAborted: true, outcome: "AbortError" },
 		);
+		});
+	}
+
+	test("preserves method, body and native failure for disturbed Request", async () => {
+		const fetchCalls = [];
+		const { dom, sandbox } = makeInjected({
+			fetchStub: (...args) => {
+				fetchCalls.push(args);
+				return fetch(...args);
+			},
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		await request.text();
+
+		await assert.rejects(sandbox.window.fetch(request), { name: "TypeError" });
+		assert.strictEqual(fetchCalls[0][0], request);
+		assert.strictEqual(request.bodyUsed, true);
+	});
+
+	test("preserves native failure for invalid Request init without consuming body", async () => {
+		const controlRequest = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		let nativeError;
+		try {
+			await fetch(controlRequest, { method: "GET" });
+		} catch (error) {
+			nativeError = error;
+		}
+
+		const { dom, sandbox, fetchCalls } = makeInjected({
+			fetchStub: (...args) => fetch(...args),
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const request = new Request("https://example.com/api", {
+			method: "POST",
+			body: "single-read",
+			duplex: "half",
+		});
+		await assert.rejects(sandbox.window.fetch(request, { method: "GET" }), {
+			name: nativeError.name,
+		});
+		assert.strictEqual(fetchCalls.length, 0);
+		assert.strictEqual(request.bodyUsed, false);
 	});
 });
 
@@ -755,6 +877,43 @@ describe("injected.js fetch response stream passthrough", () => {
 		assert.strictEqual(firstChunk.done, false);
 		assert.strictEqual(secondChunk.done, false);
 		assert.strictEqual((await reader.read()).done, true);
+	});
+
+	test("does not expose delayed stream chunks before enqueue", async () => {
+		let enqueueChunk;
+		const stream = new ReadableStream({
+			start(controller) {
+				enqueueChunk = (value) => controller.enqueue(new TextEncoder().encode(value));
+			},
+		});
+		const response = new Response(stream);
+		const { dom, sandbox } = makeInjected({
+			fetchStub: () => Promise.resolve(response),
+		});
+		dom.fire("requestid-config", {
+			prefix: "req",
+			patterns: ["https://example.com/*"],
+		});
+		const returnedResponse = await sandbox.window.fetch("https://example.com/media");
+		const reader = returnedResponse.body.getReader();
+		let resolved = false;
+		const firstRead = reader.read().then((chunk) => {
+			resolved = true;
+			return chunk;
+		});
+		await Promise.resolve();
+		assert.strictEqual(returnedResponse, response);
+		assert.strictEqual(returnedResponse.body, stream);
+		assert.strictEqual(resolved, false);
+
+		enqueueChunk("delayed-");
+		const firstChunk = await firstRead;
+		assert.strictEqual(new TextDecoder().decode(firstChunk.value), "delayed-");
+		assert.strictEqual(firstChunk.done, false);
+		enqueueChunk("second");
+		const secondChunk = await reader.read();
+		assert.strictEqual(new TextDecoder().decode(secondChunk.value), "second");
+		assert.strictEqual(secondChunk.done, false);
 	});
 });
 
