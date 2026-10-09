@@ -573,21 +573,15 @@ describe("Integration: Matcher + RequestId", () => {
 // references browser globals directly (chrome, document, CustomEvent). To
 // exercise it at runtime we load the source into a fresh vm context with a
 // minimal harness:
-//   - document stub: dispatchEvent capture, addEventListener capture,
-//     createElement returning a script-element stub, head.appendChild capture
 //   - CustomEvent stub capturing type + detail
 //   - chrome stub: storage.local.get (callback), storage.onChanged.addListener,
 //     runtime.getURL
 //
 // Proves at runtime:
-//   - bootstrap injects src/injected.js via a <script> tag and dispatches the
-//     initial "requestid-config" CustomEvent
 //   - dispatchConfig emits the exact event name + detail shape
 //   - loadAndDispatchConfig reads storage and normalizes malformed values
 //   - handleConfigRequest re-dispatches on both handshake event spellings
 //   - storage.onChanged re-dispatches only for meaningful prefix/pattern changes
-//   - fail-open when document.dispatchEvent / createElement are unavailable
-//   - script.onload removes the injected tag
 // ============================================================================
 
 const CONTENT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -719,22 +713,11 @@ function makeContentHarness({
 // BOOTSTRAP — injection + initial config dispatch
 // ---------------------------------------------------------------------------
 
-describe("content.js bootstrap: inject page-world script", () => {
-  test("injects exactly one <script> tag pointing at src/injected.js", () => {
-    const h = makeContentHarness({ prefix: "req", patterns: ["https://example.com/*"] });
-    assert.strictEqual(h.appendedScripts.length, 1);
-    const script = h.appendedScripts[0];
-    assert.strictEqual(script.tagName, "SCRIPT");
-    assert.strictEqual(script.src, "chrome-extension://test/src/injected.js");
-  });
-
-  test("script.onload removes the injected tag", () => {
-    const h = makeContentHarness();
-    const script = h.appendedScripts[0];
-    assert.strictEqual(script.removed, false);
-    script.onload();
-    assert.strictEqual(script.removed, true);
-  });
+describe("content.js bootstrap: config bridge without dynamic script injection", () => {
+	test("does not append a page-world script", () => {
+		const h = makeContentHarness({ prefix: "req", patterns: ["https://example.com/*"] });
+		assert.strictEqual(h.appendedScripts.length, 0);
+	});
 
   test("bootstrap dispatches the initial requestid-config event", () => {
     const h = makeContentHarness({ prefix: "req", patterns: ["https://example.com/*"] });
@@ -953,19 +936,13 @@ describe("content.js fails open when DOM APIs are unavailable", () => {
     assert.strictEqual(h.dispatched.length, 0);
   });
 
-  test("injectPageWorldScript does not throw when createElement throws", () => {
+  test("bootstrap does not depend on document.createElement", () => {
     const h = makeContentHarness({ createElementThrows: true });
-    let threw = false;
-    try {
-      h.sandbox.injectPageWorldScript();
-    } catch {
-      threw = true;
-    }
-    assert.strictEqual(threw, false);
+    assert.strictEqual(h.dispatched[0].type, "requestid-config");
     assert.strictEqual(h.appendedScripts.length, 0);
   });
 
-  test("bootstrap still dispatches config when injection is unavailable", () => {
+  test("bootstrap dispatches config for the statically registered page script", () => {
     const h = makeContentHarness({
       prefix: "req",
       patterns: ["https://a.com/*"],

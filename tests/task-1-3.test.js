@@ -313,17 +313,8 @@ describe("content.js is a thin bridge (no direct fetch/XHR wrapping)", () => {
 		assert.match(CONTENT_SOURCE, /document\.dispatchEvent/);
 	});
 
-	test("injects src/injected.js via chrome.runtime.getURL", () => {
-		assert.match(
-			CONTENT_SOURCE,
-			/chrome\.runtime\.getURL\(\s*["']src\/injected\.js["']\s*\)/,
-			"content.js must resolve src/injected.js with chrome.runtime.getURL",
-		);
-		assert.match(
-			CONTENT_SOURCE,
-			/createElement\(\s*["']script["']\s*\)/,
-			"content.js must create a <script> element",
-		);
+	test("keeps page-world interception in the statically registered script", () => {
+		assert.doesNotMatch(CONTENT_SOURCE, /createElement\(\s*["']script["']\s*\)/);
 	});
 
 	test("does NOT wrap window.fetch directly", () => {
@@ -345,30 +336,7 @@ describe("content.js is a thin bridge (no direct fetch/XHR wrapping)", () => {
 // CONTENT.JS — RUNTIME CONTRACT (loaded in a vm with browser stubs)
 // ============================================================================
 
-describe("content.js bootstrap: injects page-world script + dispatches config", () => {
-	test("creates a <script> tag pointing at the injected script and appends it", () => {
-		const store = { prefix: "req", patterns: ["https://example.com/*"] };
-		const { dom } = makeContent({ store });
-		const scripts = dom.scripts();
-		assert.strictEqual(
-			scripts.length,
-			1,
-			"exactly one script tag should be injected",
-		);
-		assert.strictEqual(
-			scripts[0].src,
-			"chrome-extension://abcdefghijklmnopabcdefghijklmnop/src/injected.js",
-		);
-	});
-
-	test("script.onload removes the injected tag", () => {
-		const { dom } = makeContent({ store: {} });
-		const script = dom.scripts()[0];
-		assert.strictEqual(typeof script.onload, "function");
-		script.onload();
-		assert.strictEqual(script.removed, true);
-	});
-
+describe("content.js bootstrap: dispatches bridge config", () => {
 	test("dispatches requestid-config with prefix/patterns from storage on load", () => {
 		const store = { prefix: "req", patterns: ["https://example.com/*"] };
 		const { dom } = makeContent({ store });
@@ -456,16 +424,10 @@ describe("content.js live refresh: chrome.storage.onChanged re-dispatches config
 	});
 });
 
-describe("content.js fail-open when DOM APIs are unavailable", () => {
+	describe("content.js fail-open when DOM APIs are unavailable", () => {
 	test("does not throw when document.dispatchEvent throws", () => {
 		assert.doesNotThrow(() => {
 			makeContent({ store: { prefix: "req" }, dispatchThrows: true });
-		});
-	});
-
-	test("does not throw when document.createElement throws", () => {
-		assert.doesNotThrow(() => {
-			makeContent({ store: { prefix: "req" }, createElementThrows: true });
 		});
 	});
 });
@@ -1278,10 +1240,19 @@ describe("manifest exposes src/injected.js to the page world", () => {
 	});
 
 	test("manifest still loads the content-script bridge", () => {
-		const jsFiles = (manifest.content_scripts || []).flatMap(
-			(cs) => cs.js || [],
-		);
+		const entries = manifest.content_scripts || [];
+		const jsFiles = entries.flatMap((cs) => cs.js || []);
 		assert.ok(jsFiles.includes("src/content.js"));
+		assert.ok(jsFiles.includes("src/injected.js"));
+		assert.ok(
+			entries.some(
+				(cs) =>
+					cs.js?.includes("src/injected.js") &&
+					cs.run_at === "document_start" &&
+					cs.world === "MAIN",
+			),
+			"interceptor must run at document_start in MAIN world",
+		);
 		for (const rel of jsFiles) {
 			assert.ok(
 				fs.existsSync(path.join(ROOT, rel)),

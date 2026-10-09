@@ -5,16 +5,13 @@
  * Manifest V3 classic scripts cannot import ES modules.
  *
  * Responsibilities
- *   1. Inject src/injected.js into the page world via a dynamically created
- *      <script> tag so the page-world interceptor can wrap window.fetch and
- *      XMLHttpRequest for page-originated requests.
- *   2. Load prefix + patterns from chrome.storage.local and forward them to
+ *   1. Load prefix + patterns from chrome.storage.local and forward them to
  *      the injected script via a "requestid-config" CustomEvent.
- *   3. Refresh the injected script's config live via storage.onChanged.
- *   4. Answer config-request handshakes from the injected script.
+ *   2. Refresh the injected script's config live via storage.onChanged.
+ *   3. Answer config-request handshakes from the injected script.
  *
- * All fetch/XHR interception lives in src/injected.js (page world); this
- * script is only the chrome.storage ↔ page-world bridge.
+ * src/injected.js is statically registered in the page's MAIN world before
+ * page scripts; this script is only the chrome.storage ↔ page-world bridge.
  */
 
 // ---------------------------------------------------------------------------
@@ -46,22 +43,6 @@ function loadAndDispatchConfig() {
     const configPatterns = Array.isArray(items.patterns) ? items.patterns : [];
     dispatchConfig(configPrefix, configPatterns);
   });
-}
-
-// ---------------------------------------------------------------------------
-// Page-world injection
-// ---------------------------------------------------------------------------
-
-/** Inject src/injected.js into the page world via a dynamically created script tag. */
-function injectPageWorldScript() {
-  try {
-    const script = document.createElement("script");
-    script.src = chrome.runtime.getURL("src/injected.js");
-    script.onload = () => script.remove();
-    (document.head || document.documentElement).appendChild(script);
-  } catch (_) {
-    /* fail-open: injection unavailable */
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -97,5 +78,4 @@ chrome.storage.onChanged.addListener((changes) => {
 // Bootstrap
 // ---------------------------------------------------------------------------
 
-injectPageWorldScript();
 loadAndDispatchConfig();
