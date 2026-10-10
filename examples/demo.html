@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RequestID Extension Demo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .demo-section {
+            margin: 2rem 0;
+        }
+        .button-group {
+            display: flex;
+            gap: 1rem;
+            margin: 1rem 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .result-panel {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            min-height: 2rem;
+        }
+        .success {
+            color: #28a745;
+        }
+        .error {
+            color: #dc3545;
+        }
+        .info {
+            color: #17a2b8;
+        }
+        .endpoint-info {
+            margin: 1rem 0;
+            padding: 0.5rem;
+            background: #e9ecef;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .extension-info {
+            margin: 1rem 0;
+            padding: 1rem;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 4px;
+        }
+        .header-display {
+            margin: 0.5rem 0;
+            padding: 0.25rem;
+            background: #f1f3f4;
+            border-radius: 3px;
+            font-size: 0.85rem;
+        }
+        .step-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            background: #28a745;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 20px;
+            margin-right: 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 RequestID Extension Demo</h1>
+        
+        <div class="extension-info">
+            <strong>Extension Configuration:</strong><br>
+            • Prefix: <code>dev</code><br>
+            • Pattern: <code>http://127.0.0.1/*</code><br>
+            • Server: Running on localhost
+        </div>
+        
+        <div class="demo-section">
+            <h2>Step 1: Make HTTP Requests</h2>
+            <p>Test the RequestID extension by sending requests that should receive the <code>X-Request-ID</code> header:</p>
+            
+<div class="button-group">
+            <button id="fetch-btn" type="button" onclick="sendFetch()">Send fetch</button>
+            <button id="xhr-btn" type="button" onclick="sendXHR()">Send XHR</button>
+            <button id="reset-btn" type="button" onclick="resetDemo()">Reset</button>
+        </div>
+            
+            <div class="endpoint-info">
+                <strong>API Endpoints:</strong><br>
+                • GET /api/echo - Responds to fetch requests<br>
+                • GET /api/echo-xhr - Responds to XHR requests
+            </div>
+        </div>
+        
+        <div class="demo-section">
+            <h2>Step 2: Results</h2>
+            <div id="result-panel" class="result-panel">Click buttons above to start the demo...</div>
+        </div>
+        
+        <div class="demo-section">
+            <h2>Step 3: Verification</h2>
+            <p>In Chrome DevTools (F12), go to the Network tab and:
+            <ol>
+                <li>Filter for "Fetch" and "XHR" requests</li>
+                <li>Click each request to inspect headers</li>
+                <li>Look for <code>X-Request-ID: dev-xxxxx</code> in Request Headers</li>
+                <li>Compare with server console logs</li>
+            </ol>
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        let results = {};
+        
+        function updateResultPanel() {
+            const panel = document.getElementById('result-panel');
+            let html = '<h3>Demo Results:</h3>';
+            
+            if (results.fetch) {
+                html += `<div class="success">✅ Fetch request completed</div>`;
+                html += `<div class="header-display">Fetch result: ${JSON.stringify(results.fetch, null, 2)}</div>`;
+            } else {
+                html += '<div class="info">⏳ Fetch request pending...</div>';
+            }
+            
+            if (results.xhr) {
+                html += `<div class="success">✅ XHR request completed</div>`;
+                html += `<div class="header-display">XHR result: ${JSON.stringify(results.xhr, null, 2)}</div>`;
+            } else {
+                html += '<div class="info">⏳ XHR request pending...</div>';
+            }
+            
+            if (results.fetch && results.xhr) {
+                html += '<div class="success"><strong>✅ Demo Complete!</strong> Both fetch and XHR requests received the X-Request-ID header.</div>';
+                
+                // Check if IDs match
+                if (results.fetch.requestId === results.xhr.requestId) {
+                    html += `<div class="success">🎯 Both requests have the same Request ID: ${results.fetch.requestId}</div>`;
+                }
+            }
+            
+            panel.innerHTML = html;
+        }
+        
+        async function sendFetch() {
+            const button = document.getElementById('fetch-btn');
+            button.disabled = true;
+            button.textContent = 'Sending...';
+            
+            try {
+                const startTime = Date.now();
+                const response = await fetch('/api/echo');
+                const data = await response.json();
+                
+                results.fetch = data;
+                console.log('Fetch response:', data);
+                
+                updateResultPanel();
+            } catch (error) {
+                console.error('Fetch error:', error);
+                updateResultPanel();
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Send fetch';
+            }
+        }
+        
+        async function sendXHR() {
+            const button = document.getElementById('xhr-btn');
+            button.disabled = true;
+            button.textContent = 'Sending...';
+            
+            try {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', '/api/echo-xhr', true);
+                
+                xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        const data = JSON.parse(xhr.responseText);
+                        results.xhr = data;
+                        console.log('XHR response:', data);
+                        updateResultPanel();
+                    } else {
+                        console.error('XHR error:', xhr.status, xhr.statusText);
+                        updateResultPanel();
+                    }
+                };
+                
+                xhr.onerror = () => {
+                    console.error('XHR network error');
+                    updateResultPanel();
+                };
+                
+                xhr.send();
+            } catch (error) {
+                console.error('XHR setup error:', error);
+                updateResultPanel();
+            } finally {
+                button.disabled = false;
+                button.textContent = 'Send XHR';
+            }
+        }
+        
+        function resetDemo() {
+            results = {};
+            updateResultPanel();
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateResultPanel();
+        });
+    </script>
+</body>
+</html>
