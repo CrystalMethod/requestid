@@ -73,4 +73,4 @@ tests/                  Node.js tests
 
 ## License
 
-Private repository.
+[MIT LICENSE](./LICENSE)
