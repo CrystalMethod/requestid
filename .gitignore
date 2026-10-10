@@ -5,3 +5,5 @@ dist/
 .DS_Store
 .omo/
 .playwright-mcp/
+.opencode/
+.swarm/
