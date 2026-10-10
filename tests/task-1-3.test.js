@@ -1357,11 +1357,7 @@ describe("injected.js request id generation (observed via fetch)", () => {
 	});
 });
 
-// ============================================================================
-// MANIFEST — page-world script is web-accessible
-// ============================================================================
-
-describe("manifest exposes src/injected.js to the page world", () => {
+describe("manifest contains static content_scripts registration", () => {
 	let manifest;
 
 	before(() => {
@@ -1390,33 +1386,11 @@ describe("manifest exposes src/injected.js to the page world", () => {
 		}
 	});
 
-	test("web_accessible_resources exposes src/injected.js to <all_urls>", () => {
-		const war = manifest.web_accessible_resources;
-		assert.ok(Array.isArray(war), "web_accessible_resources must be an array");
-
-		// Support both the MV3 object form and the legacy flat string form.
-		const resources = [];
-		const matches = [];
-		for (const entry of war) {
-			if (typeof entry === "string") {
-				resources.push(entry);
-			} else {
-				for (const r of entry.resources || []) resources.push(r);
-				for (const m of entry.matches || []) matches.push(m);
-			}
-		}
-
-		assert.ok(
-			resources.includes("src/injected.js"),
-			"src/injected.js must be a web-accessible resource",
-		);
-		assert.ok(
-			matches.includes("<all_urls>"),
-			"src/injected.js must be exposed to <all_urls>",
-		);
-		assert.ok(
-			fs.existsSync(path.join(ROOT, "src", "injected.js")),
-			"the exposed resource must exist on disk",
+	test("does not re-expose the interceptor as a web-accessible resource", () => {
+		assert.strictEqual(
+			manifest.web_accessible_resources,
+			undefined,
+			"static MAIN-world registration replaces page-world script injection",
 		);
 	});
 });
