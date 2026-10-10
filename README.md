@@ -8,6 +8,8 @@ Chrome MV3 extension that injects `X-Request-ID: <prefix>-<5 alnum chars>` (e.g.
 2. Set a prefix in the onboarding tab (e.g. `dev`). Reopen the toolbar popup any time to change it.
 3. Add URL patterns in the popup. The default list is empty, so nothing is injected until you add one.
 
+End-to-end walkthrough with captured evidence: [docs/sample-usage.md](docs/sample-usage.md).
+
 ## URL Patterns
 
 | Pattern | Matches |
